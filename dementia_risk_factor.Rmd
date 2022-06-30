@@ -1,0 +1,3719 @@
+---
+title: "Dementia risk factor"
+author: "Haozhe Wang"
+date: "2022/6/1"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+setwd("C:/Users/whz/Desktop/res/Edingburgh/disseration/Project 1/Data and Code")
+print.all.code=TRUE
+```
+
+## Load data
+
+Load the easySHARE data. For information on data and variables, see the [easySHARE data guide](http://www.share-project.org/fileadmin/pdf_documentation/easySHARE_Release_8.0.0_ReleaseGuide.pdf).
+
+```{r easyshare}
+load("easySHARE_rel8_0_0.rda")
+```
+
+Load packages:
+
+```{r packs, message = FALSE}
+library(ggplot2)
+library(tidyverse)
+library(gridExtra)
+library(mice)
+library(JointAI)
+library(devtools)
+library(bnlearn)
+
+library(Rgraphviz)
+```
+
+## EDA
+Exploratory data analysis. There are three sections in the following.
+
+### Extract the useful variable based on knowledage 
+I choose the variables related to the 12 risk factor of dementia and some interesting variables.
+```{r}
+# change the missing values (all negative values) to NA
+easySHARE_rel8_0_0[easySHARE_rel8_0_0<0] <- NA
+# extract the useful variable relative to the risk factor of dementia
+eassy_share_important_variables <- easySHARE_rel8_0_0 %>%
+  select(mergeid,wave,wavepart,country_mod,female,age,isced1997_r,
+         hhsize,
+         chronic_mod,eurod,recall_1,recall_2,
+         orienti,numeracy_1,numeracy_2,bmi2,smoking,br010_mod,
+         br015_,co007_)
+
+# change the column names to make it easy to understand
+colnames(eassy_share_important_variables) <- c("ID","wave","wavepart","country_iso"
+      ,"sex","age","education_level","live_with_number_people",
+     "number_of_diseases","Depression_scale","recall_1",
+     "recall_2","orienti","numeracy_1","numeracy_2","BMI","Smoking",
+     "Drunking_behavior","vigorous_activities","Household_able_to_make_ends_meet")
+```
+
+### Feature Engineering 
+#### do some feature engineering on the origion data 
+Basically, change the type of the variable or cut to factor variable.
+
+```{r}
+# see the structure
+str(eassy_share_important_variables,give.attr=FALSE)
+summary(eassy_share_important_variables)
+# visualize the distribution of the observed values in the different variables look like
+par(mar=c(3,3,2,1),mgp = c(2,0.6,0))
+plot_all(eassy_share_important_variables)
+
+# change the drinking behavior  (order factor)
+eassy_share_important_variables$Drunking_behavior<- cut(
+  eassy_share_important_variables$Drunking_behavior,
+           breaks = c(1,3,5,7,8), ordered_result = TRUE, right = FALSE)
+# change the vigorous activities  (order factor)
+eassy_share_important_variables$vigorous_activities<- cut(
+  eassy_share_important_variables$vigorous_activities,
+           breaks = c(1,4,5), ordered_result = TRUE, right = FALSE)
+# change the household net income variable
+eassy_share_important_variables$Household_able_to_make_ends_meet<-as.ordered(
+  eassy_share_important_variables$Household_able_to_make_ends_meet)
+# change the education level variable
+eassy_share_important_variables<- eassy_share_important_variables%>%
+         mutate(
+           education_level_new=ifelse(education_level>=95,NA,education_level)
+         )
+# change the age variables
+# focus on age >=60 divide into category variables
+ eassy_share_important_variables$age<-cut(eassy_share_important_variables$age,
+           breaks = c(seq(60,90,5),120), ordered_result = TRUE, right = FALSE)
+ 
+ 
+ # change the living_with_number_people variable
+# from the plot we divide into 1,2 ,>=3
+ eassy_share_important_variables$live_with_number_people<-cut(
+   eassy_share_important_variables$live_with_number_people,
+           breaks = c(0,1,2,13), ordered_result = TRUE)
+ 
+  # change the number_of_diseases variable
+# from the plot we divide into 0,1,2,3,>=4
+ eassy_share_important_variables$number_of_diseases<-cut(
+   eassy_share_important_variables$number_of_diseases,
+           breaks = c(0,1,2,3,11), ordered_result = TRUE, right = FALSE)
+ 
+ 
+   # change the Depression_scale
+# from the plot we divide into 0~1,2~4 ,5~7,8~12
+ eassy_share_important_variables$Depression_scale<-cut(
+   eassy_share_important_variables$Depression_scale,
+           breaks = c(0,2,5,8,13), ordered_result = TRUE, right = FALSE)
+ 
+
+ 
+ 
+ 
+ 
+# change wave, wavepart, sex, country_iso, BMI, education_level_new,smoking 
+ # to factor
+# change the sex variables 
+eassy_share_important_variables$sex<- factor(eassy_share_important_variables$sex)
+# change the wave variables 
+eassy_share_important_variables$wave<- factor(eassy_share_important_variables$wave)
+# change the wavepart variables 
+eassy_share_important_variables$wavepart<- factor(
+                                eassy_share_important_variables$wavepart)
+# change the country_iso variables 
+eassy_share_important_variables$country_iso<- factor(
+                               eassy_share_important_variables$country_iso)
+# change the BMI variables 
+eassy_share_important_variables$BMI<- ordered(
+   eassy_share_important_variables$BMI)
+# change the education_level variables 
+eassy_share_important_variables$education_level_new<- cut(
+                  eassy_share_important_variables$education_level_new,
+                  breaks = c(0,2,3,5,7), ordered_result = TRUE, right = FALSE)
+# change the smoking variables 1: not smoking(N); 2: smoking(Y)
+eassy_share_important_variables$Smoking<- as.factor(ifelse(
+  eassy_share_important_variables$Smoking==1,"Y","N"))
+
+# age >=60
+eassy_share_important_variables_large60<-eassy_share_important_variables %>%
+   filter(!is.na(age))
+# combine the recall variable
+# combine the cognitive variable
+eassy_share_important_variables_large60<- eassy_share_important_variables_large60%>%
+         mutate(
+           combine_recall=recall_1+recall_2,
+           combine_cognitive=recall_1+recall_2+orienti+numeracy_1-1+numeracy_2
+         )
+CUT_1 <- floor(mean(eassy_share_important_variables_large60$combine_recall,na.rm=TRUE)-
+  1.5*sd(eassy_share_important_variables_large60$combine_recall,na.rm=TRUE))
+CUT_2 <-  floor(mean(eassy_share_important_variables_large60$combine_cognitive,na.rm=TRUE)-
+  1.5*sd(eassy_share_important_variables_large60$combine_cognitive,na.rm=TRUE))
+#add new columns to determine whether this person is dementia or not based on combine recall
+eassy_share_important_variables_large60$dementia_recall <- cut(
+  eassy_share_important_variables_large60$combine_recall,
+   breaks = c(-1,CUT_1,5,20), ordered_result = TRUE)
+#add new columns to determine whether this person is dementia or not based on combine cognitive
+eassy_share_important_variables_large60$dementia_cognitive <- cut(
+  eassy_share_important_variables_large60$combine_cognitive,
+   breaks = c(-1,CUT_2,14,33), ordered_result = TRUE)
+eassy_share_important_variables_large60 <- eassy_share_important_variables_large60 %>%
+  select(-education_level)
+# see the structure
+str(eassy_share_important_variables_large60,give.attr=FALSE)
+summary(eassy_share_important_variables_large60)
+# visualize the distribution of the observed values in the different variables look like
+par(mar=c(3,3,2,1),mgp = c(2,0.6,0))
+plot_all(eassy_share_important_variables_large60)
+# see the structure
+eassy_share_important_variables_large70 <- eassy_share_important_variables_large60%>%
+  filter(age>="[70,75)")
+str(eassy_share_important_variables_large70,give.attr=FALSE)
+summary(eassy_share_important_variables_large70)
+# visualize the distribution of the observed values in the different variables look like
+su_1<- summary(eassy_share_important_variables_large70$dementia_recall)
+su_2<- summary(eassy_share_important_variables_large70$dementia_cognitive)
+cat("prob dementia using combine recall",su_1[1]/(su_1[1]+su_1[2]+su_1[3]))
+cat("prob CIND using combine recall",su_1[2]/(su_1[1]+su_1[2]+su_1[3]))
+cat("prob dementia using combine cognitive",su_2[1]/(su_2[1]+su_2[2]+su_2[3]))
+cat("prob CIND using combine cognitive",su_2[2]/(su_2[1]+su_2[2]+su_2[3]))
+# the cut off score for combine_recall is <=2,<=5,<=20
+# the cut off score for combine_cognitive is <=9,<=14,<=33
+# these cut off score can satisfy around 0.1 people is severly impaired, 
+# 0.2 people is mild impairment for age >=70 population
+```
+
+### Deal with the mising values
+#### see the missing pattern for all 8 waves
+compare the 7 pattern (wave 3 missing too much)
+
+```{r}
+for (i in c(1,2,4,5,6,7,8)){
+  # set up 8 data frame
+  nn <- paste0("eassy_share_important_variables_large60_wave_",as.character(i),sep="")
+  dataframe <- eassy_share_important_variables_large60 %>% filter(wave==i)
+  assign(nn,dataframe )
+  
+  # plot the missing data pattern
+  mp<-md_pattern(dataframe ,pattern = FALSE,color = c('#34111b','#e30f41'))
+  print(mp)
+}
+# For wave 1, dementia_cognitive is complete missing(not important)
+# For wave 2, dementia_cognitive is complete missing
+# For wave 3, lots of variables is complete missing
+# For wave 4, no variable is complete missing and the most proportion is 0.442
+# For wave 5, no variable is complete missing and the most proportion is 0.707
+# For wave 6, Drinking_behavior is complete missing
+# For wave 7, Drinking_behavior and dementia_cognitive are complete missing
+# For wave 8, Drinking_behavior is complete missing
+```
+
+
+
+
+
+
+
+
+
+
+#### deal missing values based on only one wave (wave 4) and one country(estonia)
+using multiple imputation to impute the missing values
+```{r}
+# The reason I choose wave 4 because it contains more information and less missing values
+summary(eassy_share_important_variables_large60_wave_4)
+# The reason I choose Estonia because it contains more data in the wave 4
+eassy_share_important_variables_large60_wave_4_estonia <-
+  eassy_share_important_variables_large60_wave_4%>%
+  filter(country_iso==233)%>%
+  select(-wave,-ID,-wavepart,-country_iso,-combine_recall,-dementia_recall,-recall_1,-recall_2,-orienti,-numeracy_1,-numeracy_2)
+  
+
+summary(eassy_share_important_variables_large60_wave_4_estonia)
+# plot the missing pattern
+md_pattern(eassy_share_important_variables_large60_wave_4_estonia ,
+           pattern = FALSE,color = c(  '#34111b','#e30f41'))
+# visualize the distribution of the observed values in the different variables 
+par(mar=c(3,3,2,1),mgp = c(2,0.6,0))
+plot_all(eassy_share_important_variables_large60_wave_4_estonia)
+# For the category variables, two category variable will be imputed base on logreg method
+# multi-category variables will be imputed base on polr or polyreg method
+# For the continuous variables, they will be imputed base on pmm method 
+# because all the continuous variables in the data are int
+# setup run of mice
+imp0_wave_4_estonia <- mice(data=
+              eassy_share_important_variables_large60_wave_4_estonia ,maxit=0)
+imp0_wave_4_estonia
+#set the method 
+meth_wave_4_estonia <-imp0_wave_4_estonia$method
+visit_wave_4_estonia <- imp0_wave_4_estonia$visitSequence
+meth_wave_4_estonia["dementia_cognitive"] <- "~I(ifelse(combine_cognitive<=9,'(-1,9]',
+                              ifelse(combine_cognitive<=14,'(9,14]','(14,33]')))"
+# set the predictor matrix
+pred_wave_4_estonia <- imp0_wave_4_estonia$predictorMatrix
+# let  dementia_cognitive column be 0
+pred_wave_4_estonia[,c( "dementia_cognitive")] <-0
+#multiple imputation
+imp_wave_4_estonia <- mice(data=
+      eassy_share_important_variables_large60_wave_4_estonia,
+      method=meth_wave_4_estonia,predictorMatrix = pred_wave_4_estonia,
+      visitSequence=visit_wave_4_estonia,maxit=20,m=5,seed=1,printFlag = FALSE)
+# check loogedEvents
+imp_wave_4_estonia$loggedEvents
+# no loogedEvents
+plot(imp_wave_4_estonia,layout=c(4,6)) 
+# density plot (check the continuous variable)
+densityplot(imp_wave_4_estonia)
+#from the plot we can see that the density all similar
+# category plot (check the category variable)
+source_url("https://gist.githubusercontent.com/NErler/0d00375da460dd33839b98faeee2fdab/raw/c6f537ecf80eddcefd94992ec7926aa57d454536/propplot.R")
+propplot(imp_wave_4_estonia)
+#from the plot we can see that the density all similar
+plot(eassy_share_important_variables_large60_wave_4_estonia$age)
+plot(eassy_share_important_variables_large60_wave_4_estonia$age[is.na(eassy_share_important_variables_large60_wave_4_estonia$combine_cognitive)])
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#### deal missing values based on multi_wave and multi_country
+using multiple imputation to impute the missing values
+```{r}
+# For the multi-countries, I choose two central Europe countries(France,Switzerland)?
+# two Mediterranean countries(Spain,Italy),two developing countries(Bulgaria,Croatia)
+eassy_share_important_variables_large60_6countries <- 
+  eassy_share_important_variables_large60 %>%
+   dplyr::filter(country_iso %in% c(250,756,724,380,100,191)) 
+
+eassy_share_important_variables_large60_6countries <- 
+  eassy_share_important_variables_large60_6countries %>%
+  dplyr::distinct(ID,.keep_all = TRUE) %>%
+   dplyr::filter(wave!=3) %>%
+  dplyr::mutate(countries = ifelse(country_iso %in% c(100,191),0,ifelse(country_iso %in% c(250,756),1,2)) )%>%
+   dplyr::select(-ID,-wave,-wavepart,-country_iso,-combine_cognitive,-dementia_cognitive,-recall_1,-recall_2,-orienti,-numeracy_1,-numeracy_2)
+
+eassy_share_important_variables_large60_6countries$countries<- factor(eassy_share_important_variables_large60_6countries$countries)
+summary(eassy_share_important_variables_large60_6countries)
+# plot the missing pattern
+md_pattern(eassy_share_important_variables_large60_6countries ,
+           pattern = FALSE,color = c(  '#34111b','#e30f41')) 
+# visualize the distribution of the observed values in the different variables look like
+par(mar=c(3,3,2,1),mgp = c(2,0.6,0))
+plot_all(eassy_share_important_variables_large60_6countries)
+# For the category variables, two category variable will be imputed base on logreg method
+# multi-category variables will be imputed base on polr or polyreg method
+# For the continuous variables, they will be imputed base on pmm method 
+# because all the continuous variables in the data are int
+# setup run of mice
+imp0_6countries <- mice(data=eassy_share_important_variables_large60_6countries ,maxit=0)
+imp0_6countries
+#set the method 
+meth_6countries<-imp0_6countries$method
+visit_6countries <- imp0_6countries$visitSequence
+visit_6countries <- c(visit_6countries[20:21],visit_6countries[1:19])
+meth_6countries["dementia_recall"] <- "~I(ifelse(combine_recall<=2,'(-1,2]',
+                               ifelse(combine_recall<=5,'(2,5]','(5,20]')))"
+# set the predictor matrix
+pred_6countries <- imp0_6countries$predictorMatrix
+# let wavepart,dementia_recall column be 0
+pred_6countries[,c("dementia_recall","countries")] <-0
+#multiple imputation
+imp_6countries <- mice(data=
+      eassy_share_important_variables_large60_6countries,
+      method=meth_6countries,predictorMatrix = pred_6countries,
+      visitSequence=visit_6countries,maxit=20,m=5,seed=1,printFlag = FALSE)
+# check loogedEvents
+imp_6countries$loggedEvents
+# no loogedEvents
+# density plot (check the continuous variable)
+densityplot(imp_6countries)
+#from the plot we can see that the density all similar
+# category plot (check the category variable)
+propplot(imp_6countries)
+#from the plot we can see that the density all similar
+plot(eassy_share_important_variables_large60_6countries$age[is.na(eassy_share_important_variables_large60_6countries$combine_recall)])
+plot(eassy_share_important_variables_large60_6countries$age)
+
+```
+
+##Bayesian Network
+learning the data using Bayesian network methods
+### one wave (wave 4) one countries(Estonia)
+#### structual learning by constrain methods
+set the blacklist whitelist and some pre prepare  
+```{r}
+# Use incremental association Markov blanket to learn the DAG
+eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive <- 
+  eassy_share_important_variables_large60_wave_4_estonia %>%
+  select(-combine_cognitive)
+# change the column names to make it easy to understand
+colnames(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive) <-
+  c("Sex","Age","LWNP","NOD","DS","BMI","SMK","DK",
+    "VA","HAM","EDUL", "AD")
+# Create blacklist of edges
+myblacklist_AD_cognitive_1 =  tiers2blacklist(list("Sex", "Age", 
+    c("LWNP","NOD","DS","BMI","SMK","DK", "VA","HAM","EDUL")))
+myblacklist_AD_cognitive_2 = tiers2blacklist(list(
+    c("LWNP","NOD","BMI","SMK","DK", "VA","HAM","EDUL","Sex","Age","DS"),"AD"))
+myblacklist_AD_cognitive = rbind(myblacklist_AD_cognitive_1,
+                                 myblacklist_AD_cognitive_2)
+# Create whitelist of edges
+# Create blacklist of edges
+mywhitelist_AD_cognitive = matrix(c(
+                   "EDUL","AD"
+                   ), 
+                 byrow = TRUE, ncol=2, dimnames =list(NULL,c("from","to")))
+#drop NA
+eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive = 
+  drop_na(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive)
+#imputations 
+for (i in 1:5){
+  nn <- paste0("imp_wave_4_estonia_",as.character(i),sep="")
+  dataframe <- complete(imp_wave_4_estonia,i)%>%
+         select(-combine_cognitive)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD")
+assign(nn,dataframe )
+}
+score_bic_different_structure <- matrix(nrow = 18,ncol=6)
+score_bde_different_structure <- matrix(nrow = 18,ncol=6)
+score_loglik_different_structure <- matrix(nrow = 18,ncol=6)
+```
+
+using gs method
+```{r}
+set.seed(4)
+#use gs
+#gs with NA
+wave_4_estonia.gs =gs(
+  eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive,
+  blacklist = myblacklist_AD_cognitive, whitelist = mywhitelist_AD_cognitive)
+#plot
+graphviz.plot(wave_4_estonia.gs,main = "gs with NA")
+# calculate the score
+score_bic_different_structure[1,6] <- score(wave_4_estonia.gs, data= 
+  eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive,
+      type = "bic")
+score_bde_different_structure[1,6] <-score(wave_4_estonia.gs,  data= 
+       eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+      type = "bde",iss=10)
+score_loglik_different_structure[1,6] <-score(wave_4_estonia.gs,  data= 
+       eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+      type = "loglik")
+for (i in 1:5){
+  dataframe <- complete(imp_wave_4_estonia,i)%>%
+         select(-combine_cognitive)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD")
+score_bic_different_structure[1,i] <- score(wave_4_estonia.gs, 
+      data=dataframe  , type = "bic")
+score_bde_different_structure[1,i] <-score(wave_4_estonia.gs, 
+      data=dataframe  , type = "bde",iss=10)
+score_loglik_different_structure[1,i] <-score(wave_4_estonia.gs,  data= 
+       dataframe, 
+      type = "loglik")
+}
+
+# gs with first imputation
+set.seed(1)
+wave_4_estonia.gs_1_boot_strength <- boot.strength(data=
+                imp_wave_4_estonia_1, 
+ algorithm = "gs",algorithm.args = list( blacklist = myblacklist_AD_cognitive, 
+                   whitelist = mywhitelist_AD_cognitive))
+plot(wave_4_estonia.gs_1_boot_strength)
+wave_4_estonia.gs_1 = averaged.network(wave_4_estonia.gs_1_boot_strength, 
+          threshold =attr(wave_4_estonia.gs_1_boot_strength, "threshold"))
+# plot
+graphviz.plot(wave_4_estonia.gs_1,main = "gs(bootstrap) with first imputation")
+# calculate the score
+score_bic_different_structure[2,6] <- score(wave_4_estonia.gs_1,  data=
+   eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive,
+   type = "bic")
+score_bde_different_structure[2,6] <-score(wave_4_estonia.gs_1, data= 
+   eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+      type = "bde",iss=10)
+score_loglik_different_structure[2,6] <-score(wave_4_estonia.gs_1,  data= 
+       eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+      type = "loglik")
+for (i in 1:5){
+  dataframe <- complete(imp_wave_4_estonia,i)%>%
+         select(-combine_cognitive)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD")
+score_bic_different_structure[2,i] <- score(wave_4_estonia.gs_1, 
+      data=dataframe  , type = "bic")
+score_bde_different_structure[2,i] <-score(wave_4_estonia.gs_1, 
+      data=dataframe  , type = "bde",iss=10)
+score_loglik_different_structure[2,i] <-score(wave_4_estonia.gs_1,  data= 
+       dataframe, 
+      type = "loglik")
+}
+# gs with second imputation
+set.seed(1)
+wave_4_estonia.gs_2_boot_strength <- boot.strength(data=
+                imp_wave_4_estonia_2, 
+  algorithm = "gs",algorithm.args = list( blacklist = myblacklist_AD_cognitive, 
+              whitelist = mywhitelist_AD_cognitive))
+plot(wave_4_estonia.gs_2_boot_strength)
+wave_4_estonia.gs_2 = averaged.network(wave_4_estonia.gs_2_boot_strength, 
+              threshold =attr(wave_4_estonia.gs_2_boot_strength,"threshold"))
+# plot
+graphviz.plot(wave_4_estonia.gs_2,main = "gs(bootstrap) with second imputation")
+# calculate the score
+score_bic_different_structure[3,6] <- score(wave_4_estonia.gs_2, data= 
+   eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+      type = "bic")
+score_bde_different_structure[3,6] <-score(wave_4_estonia.gs_2, data= 
+    eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive,
+      type = "bde",iss=10)
+score_loglik_different_structure[3,6] <-score(wave_4_estonia.gs_2,  data= 
+       eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+      type = "loglik")
+for (i in 1:5){
+  dataframe <- complete(imp_wave_4_estonia,i)%>%
+         select(-combine_cognitive)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD")
+score_bic_different_structure[3,i] <- score(wave_4_estonia.gs_2, 
+      data=dataframe  , type = "bic")
+score_bde_different_structure[3,i] <-score(wave_4_estonia.gs_2, 
+      data=dataframe  , type = "bde",iss=10)
+score_loglik_different_structure[3,i] <-score(wave_4_estonia.gs_2,  data= 
+       dataframe, 
+      type = "loglik")
+}
+```
+
+using iamb method
+
+```{r}
+set.seed(4)
+#use iamb
+#iamb with NA
+wave_4_estonia.iamb =iamb(
+  eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive, 
+  blacklist = myblacklist_AD_cognitive, whitelist = mywhitelist_AD_cognitive)
+#plot
+graphviz.plot(wave_4_estonia.iamb,main = "iamb with NA")
+# calculate the score
+score_bic_different_structure[4,6] <- score(wave_4_estonia.iamb, data= 
+     eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+     type = "bic")
+score_bde_different_structure[4,6] <-score(wave_4_estonia.iamb,  data= 
+      eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+      type = "bde",iss=10)
+score_loglik_different_structure[4,6] <- score(wave_4_estonia.iamb, data= 
+     eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+     type = "loglik")
+for (i in 1:5){
+  dataframe <- complete(imp_wave_4_estonia,i)%>%
+         select(-combine_cognitive)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD")
+score_bic_different_structure[4,i] <- score(wave_4_estonia.iamb, 
+      data=dataframe  , type = "bic")
+score_bde_different_structure[4,i] <-score(wave_4_estonia.iamb, 
+      data=dataframe  , type = "bde",iss=10)
+score_loglik_different_structure[4,i] <- score(wave_4_estonia.iamb, 
+      data=dataframe  , type = "loglik")
+}
+
+# iamb with first imputation
+set.seed(1)
+wave_4_estonia.iamb_1_boot_strength =boot.strength(
+           data=imp_wave_4_estonia_1, 
+  algorithm = "iamb",algorithm.args = list( blacklist = myblacklist_AD_cognitive, 
+                   whitelist = mywhitelist_AD_cognitive))
+plot(wave_4_estonia.iamb_1_boot_strength)
+wave_4_estonia.iamb_1 <- averaged.network(wave_4_estonia.iamb_1_boot_strength , 
+       threshold =attr(wave_4_estonia.iamb_1_boot_strength,"threshold"))
+# plot
+graphviz.plot(wave_4_estonia.iamb_1,main = "iamb(bootstrap) with first imputation")
+# calculate the score
+score_bic_different_structure[5,6] <- score(wave_4_estonia.iamb_1,  data= 
+      eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive,
+      type = "bic")
+score_bde_different_structure[5,6] <-score(wave_4_estonia.iamb_1,   data= 
+      eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive,
+      type = "bde",iss=10)
+score_loglik_different_structure[5,6] <-score(wave_4_estonia.iamb_1,   data= 
+      eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive,
+      type = "loglik")
+for (i in 1:5){
+  dataframe <- complete(imp_wave_4_estonia,i)%>%
+         select(-combine_cognitive)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD")
+score_bic_different_structure[5,i] <- score(wave_4_estonia.iamb_1, 
+      data=dataframe  , type = "bic")
+score_bde_different_structure[5,i] <-score(wave_4_estonia.iamb_1, 
+      data=dataframe  , type = "bde",iss=10)
+score_loglik_different_structure[5,i] <- score(wave_4_estonia.iamb_1, 
+      data=dataframe  , type = "loglik")
+}
+# iamb with second imputation
+set.seed(1)
+wave_4_estonia.iamb_2_boot_strength =boot.strength(
+           data=imp_wave_4_estonia_2, 
+   algorithm = "iamb",algorithm.args = list( blacklist = myblacklist_AD_cognitive, 
+                  whitelist = mywhitelist_AD_cognitive))
+plot(wave_4_estonia.iamb_2_boot_strength)
+wave_4_estonia.iamb_2 <- averaged.network(wave_4_estonia.iamb_2_boot_strength ,
+     threshold = attr(wave_4_estonia.iamb_2_boot_strength,"threshold"))
+# plot
+graphviz.plot(wave_4_estonia.iamb_2,main = "iamb(bootstrap) with second imputation")
+# calculate the score
+score_bic_different_structure[6,6] <- score(wave_4_estonia.iamb_2, data= 
+    eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive,
+      type = "bic")
+score_bde_different_structure[6,6] <-score(wave_4_estonia.iamb_2,  data= 
+    eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+      type = "bde",iss=10)
+score_loglik_different_structure[6,6] <- score(wave_4_estonia.iamb_2, data= 
+    eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive,
+      type = "loglik")
+for (i in 1:5){
+  dataframe <- complete(imp_wave_4_estonia,i)%>%
+         select(-combine_cognitive)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD")
+score_bic_different_structure[6,i] <- score(wave_4_estonia.iamb_2, 
+      data=dataframe  , type = "bic")
+score_bde_different_structure[6,i] <-score(wave_4_estonia.iamb_2, 
+      data=dataframe  , type = "bde",iss=10)
+score_loglik_different_structure[6,i] <- score(wave_4_estonia.iamb_2, 
+      data=dataframe  , type = "loglik")
+}
+```
+
+using fast.iamb method
+
+```{r}
+set.seed(4)
+#use fast.iamb
+#fast.iamb with NA
+wave_4_estonia.fast.iamb =fast.iamb(
+  eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive, 
+  blacklist = myblacklist_AD_cognitive, whitelist = mywhitelist_AD_cognitive)
+#plot
+graphviz.plot(wave_4_estonia.fast.iamb,main = "fast.iamb with NA")
+# calculate the score
+score_bic_different_structure[7,6] <- score(wave_4_estonia.fast.iamb,  data= 
+      eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+      type = "bic")
+score_bde_different_structure[7,6] <-score(wave_4_estonia.fast.iamb,  data= 
+      eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+      type = "bde",iss=10)
+score_loglik_different_structure[7,6] <- score(wave_4_estonia.fast.iamb,  data= 
+      eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+      type = "loglik")
+
+for (i in 1:5){
+  dataframe <- complete(imp_wave_4_estonia,i)%>%
+         select(-combine_cognitive)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD")
+score_bic_different_structure[7,i] <- score(wave_4_estonia.fast.iamb, 
+      data=dataframe  , type = "bic")
+score_bde_different_structure[7,i] <-score(wave_4_estonia.fast.iamb, 
+      data=dataframe  , type = "bde",iss=10)
+score_loglik_different_structure[7,i] <- score(wave_4_estonia.fast.iamb, 
+      data=dataframe  , type = "loglik")
+}
+
+
+# fast.iamb with first imputation
+set.seed(1)
+wave_4_estonia.fast.iamb_1_boot_strength =boot.strength(
+           data=imp_wave_4_estonia_1, 
+           algorithm = "fast.iamb",algorithm.args = list( 
+             blacklist = myblacklist_AD_cognitive, 
+            whitelist = mywhitelist_AD_cognitive))
+plot(wave_4_estonia.fast.iamb_1_boot_strength)
+wave_4_estonia.fast.iamb_1 <- averaged.network(
+  wave_4_estonia.fast.iamb_1_boot_strength , threshold =
+    attr(wave_4_estonia.fast.iamb_1_boot_strength,"threshold"))
+# plot
+graphviz.plot(wave_4_estonia.fast.iamb_1,main = 
+                "fast.iamb(bootstrap) with first imputation")
+# calculate the score
+score_bic_different_structure[8,6] <- score(wave_4_estonia.fast.iamb_1, data= 
+    eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+    type = "bic")
+score_bde_different_structure[8,6] <-score(wave_4_estonia.fast.iamb_1,  data= 
+    eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+      type = "bde",iss=10)
+score_loglik_different_structure[8,6] <- score(wave_4_estonia.fast.iamb_1, data= 
+    eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+    type = "loglik")
+for (i in 1:5){
+  dataframe <- complete(imp_wave_4_estonia,i)%>%
+         select(-combine_cognitive)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD")
+score_bic_different_structure[8,i] <- score(wave_4_estonia.fast.iamb_1, 
+      data=dataframe  , type = "bic")
+score_bde_different_structure[8,i] <-score(wave_4_estonia.fast.iamb_1, 
+      data=dataframe  , type = "bde",iss=10)
+score_loglik_different_structure[8,i] <- score(wave_4_estonia.fast.iamb_1, 
+      data=dataframe  , type = "loglik")
+}
+# fast.iamb with second imputation
+set.seed(1)
+wave_4_estonia.fast.iamb_2_boot_strength =boot.strength(
+           data=imp_wave_4_estonia_2, 
+   algorithm = "fast.iamb",algorithm.args = list( 
+     blacklist = myblacklist_AD_cognitive,  whitelist = mywhitelist_AD_cognitive))
+plot(wave_4_estonia.fast.iamb_2_boot_strength)
+wave_4_estonia.fast.iamb_2 <- averaged.network(
+  wave_4_estonia.fast.iamb_2_boot_strength , threshold =
+    attr(wave_4_estonia.fast.iamb_2_boot_strength,"threshold"))
+# plot
+graphviz.plot(wave_4_estonia.fast.iamb_2,main = 
+                "fast.iamb(bootstrap) with second imputation")
+# calculate the score
+score_bic_different_structure[9,6] <- score(wave_4_estonia.fast.iamb_2, data= 
+     eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive,
+      type = "bic")
+score_bde_different_structure[9,6] <-score(wave_4_estonia.fast.iamb_2,   data= 
+      eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+      type = "bde",iss=10)
+score_loglik_different_structure[9,6] <- score(wave_4_estonia.fast.iamb_2, data= 
+     eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive,
+      type = "loglik")
+for (i in 1:5){
+  dataframe <- complete(imp_wave_4_estonia,i)%>%
+         select(-combine_cognitive)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD")
+score_bic_different_structure[9,i] <- score(wave_4_estonia.fast.iamb_2, 
+      data=dataframe  , type = "bic")
+score_bde_different_structure[9,i] <-score(wave_4_estonia.fast.iamb_2, 
+      data=dataframe  , type = "bde",iss=10)
+score_loglik_different_structure[9,i] <- score(wave_4_estonia.fast.iamb_2, 
+      data=dataframe  , type = "loglik")
+}
+```
+
+using inter.iamb method
+```{r}
+set.seed(4)
+#use inter.iamb
+#inter.iamb with NA
+wave_4_estonia.inter.iamb =inter.iamb( 
+  eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive, 
+  blacklist = myblacklist_AD_cognitive,  whitelist = mywhitelist_AD_cognitive)
+#plot
+graphviz.plot(wave_4_estonia.inter.iamb,main = "inter.iamb with NA")
+
+# calculate the score
+score_bic_different_structure[10,6] <- score(wave_4_estonia.inter.iamb, data= 
+      eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+      type = "bic")
+score_bde_different_structure[10,6] <-score(wave_4_estonia.inter.iamb,  data= 
+      eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+      type = "bde",iss=10)
+score_loglik_different_structure[10,6] <- score(wave_4_estonia.inter.iamb, data= 
+      eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+      type = "loglik")
+for (i in 1:5){
+  dataframe <- complete(imp_wave_4_estonia,i)%>%
+         select(-combine_cognitive)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD")
+score_bic_different_structure[10,i] <- score(wave_4_estonia.inter.iamb, 
+      data=dataframe  , type = "bic")
+score_bde_different_structure[10,i] <-score(wave_4_estonia.inter.iamb, 
+      data=dataframe  , type = "bde",iss=10)
+score_loglik_different_structure[10,i] <- score(wave_4_estonia.inter.iamb, 
+      data=dataframe  , type = "loglik")
+}
+
+# inter.iamb with first imputation
+set.seed(1)
+wave_4_estonia.inter.iamb_1_boot_strength =boot.strength(
+           data=imp_wave_4_estonia_1, 
+              algorithm = "inter.iamb",algorithm.args = list(
+     blacklist = myblacklist_AD_cognitive,   whitelist = mywhitelist_AD_cognitive))
+plot(wave_4_estonia.inter.iamb_1_boot_strength)
+wave_4_estonia.inter.iamb_1 <- averaged.network(
+  wave_4_estonia.inter.iamb_1_boot_strength ,  threshold =  
+    attr(wave_4_estonia.inter.iamb_1_boot_strength,"threshold"))
+# plot
+graphviz.plot(wave_4_estonia.inter.iamb_1,main = 
+                "inter.iamb(bootstrap) with first imputation ")
+# calculate the score
+score_bic_different_structure[11,6] <- score(wave_4_estonia.inter.iamb_1, data= 
+      eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive,
+      type = "bic")
+score_bde_different_structure[11,6] <-score(wave_4_estonia.inter.iamb_1,   data= 
+   eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+      type = "bde",iss=10)
+score_loglik_different_structure[11,6] <- score(wave_4_estonia.inter.iamb_1, data= 
+      eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive,
+      type = "loglik")
+for (i in 1:5){
+  dataframe <- complete(imp_wave_4_estonia,i)%>%
+         select(-combine_cognitive)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD")
+score_bic_different_structure[11,i] <- score(wave_4_estonia.inter.iamb_1, 
+      data=dataframe  , type = "bic")
+score_bde_different_structure[11,i] <-score(wave_4_estonia.inter.iamb_1, 
+      data=dataframe  , type = "bde",iss=10)
+score_loglik_different_structure[11,i] <- score(wave_4_estonia.inter.iamb_1, 
+      data=dataframe  , type = "loglik")
+}
+# inter.iamb with second imputation
+set.seed(1)
+wave_4_estonia.inter.iamb_2_boot_strength =boot.strength(
+           data=imp_wave_4_estonia_2, 
+ algorithm = "inter.iamb",algorithm.args = list( 
+   blacklist = myblacklist_AD_cognitive, 
+                       whitelist = mywhitelist_AD_cognitive))
+plot(wave_4_estonia.inter.iamb_2_boot_strength)
+wave_4_estonia.inter.iamb_2 <- averaged.network(
+  wave_4_estonia.inter.iamb_2_boot_strength , threshold = 
+    attr(wave_4_estonia.inter.iamb_2_boot_strength,"threshold"))
+# plot
+graphviz.plot(wave_4_estonia.inter.iamb_2,main = 
+                "inter.iamb(bootstrap) with second imputation ")
+# calculate the score
+score_bic_different_structure[12,6] <- score(wave_4_estonia.inter.iamb_2,   data= 
+    eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+      type = "bic")
+score_bde_different_structure[12,6] <-score(wave_4_estonia.inter.iamb_2, data= 
+      eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+      type = "bde",iss=10)
+score_loglik_different_structure[12,6] <- score(wave_4_estonia.inter.iamb_2,   data= 
+    eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+      type = "loglik")
+for (i in 1:5){
+  dataframe <- complete(imp_wave_4_estonia,i)%>%
+         select(-combine_cognitive)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD")
+score_bic_different_structure[12,i] <- score(wave_4_estonia.inter.iamb_2, 
+      data=dataframe  , type = "bic")
+score_bde_different_structure[12,i] <-score(wave_4_estonia.inter.iamb_2, 
+      data=dataframe  , type = "bde",iss=10)
+score_loglik_different_structure[12,i] <- score(wave_4_estonia.inter.iamb_2, 
+      data=dataframe  , type = "loglik")
+}
+```
+
+
+
+
+
+
+
+
+#### structual learning by score methods
+Use hill-climbing to determine the DAG (score="bic")
+```{r}
+# Use hill-climbing to determine the DAG (score="bic")
+# hc.bic with drop NA
+set.seed(1)
+wave_4_estonia_narm.hc.bic_boot_strength <- boot.strength(data=
+    eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+algorithm = "hc",algorithm.args = list( blacklist = myblacklist_AD_cognitive, 
+                          whitelist = mywhitelist_AD_cognitive,   score="bic"))
+plot(wave_4_estonia_narm.hc.bic_boot_strength)
+wave_4_estonia_narm.hc.bic = averaged.network(
+  wave_4_estonia_narm.hc.bic_boot_strength, threshold = 
+    attr(wave_4_estonia_narm.hc.bic_boot_strength,"threshold"))
+# Plot final BN model
+graphviz.plot(wave_4_estonia_narm.hc.bic,main = "hc(bic,bootstrap) with drop NA")
+
+
+# calculate the score
+score_bic_different_structure[13,6] <- score(wave_4_estonia_narm.hc.bic,  data= 
+   eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+      type = "bic")
+score_bde_different_structure[13,6] <-score(wave_4_estonia_narm.hc.bic,  data=
+  eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+      type = "bde",iss=10)
+score_loglik_different_structure[13,6] <- score(wave_4_estonia_narm.hc.bic,  data= 
+   eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+      type = "loglik")
+for (i in 1:5){
+  dataframe <- complete(imp_wave_4_estonia,i)%>%
+         select( -combine_cognitive)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD")
+score_bic_different_structure[13,i] <- score(wave_4_estonia_narm.hc.bic, 
+      data=dataframe  , type = "bic")
+score_bde_different_structure[13,i] <-score(wave_4_estonia_narm.hc.bic, 
+      data=dataframe  , type = "bde",iss=10)
+score_loglik_different_structure[13,i] <- score(wave_4_estonia_narm.hc.bic, 
+      data=dataframe  , type = "loglik")
+}
+# hc.bic with first imputation
+set.seed(1)
+wave_4_estonia_1.hc.bic_boot_strength <- boot.strength(data=imp_wave_4_estonia_1, 
+  algorithm = "hc",algorithm.args = list( blacklist = myblacklist_AD_cognitive, 
+                whitelist = mywhitelist_AD_cognitive,     score="bic"))
+plot(wave_4_estonia_1.hc.bic_boot_strength)
+wave_4_estonia_1.hc.bic = averaged.network(
+  wave_4_estonia_1.hc.bic_boot_strength, threshold = 
+    attr(wave_4_estonia_1.hc.bic_boot_strength,"threshold"))
+# Plot final BN model
+graphviz.plot(wave_4_estonia_1.hc.bic,main = 
+                "hc(bic,bootstrap) with first imputation")
+# calculate the score
+score_bic_different_structure[14,6] <- score(wave_4_estonia_1.hc.bic,   data= 
+    eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+      type = "bic")
+score_bde_different_structure[14,6] <-score(wave_4_estonia_1.hc.bic,  data= 
+    eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+      type = "bde",iss=10)
+score_loglik_different_structure[14,6] <- score(wave_4_estonia_1.hc.bic,   data= 
+    eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+      type = "loglik")
+for (i in 1:5){
+  dataframe <- complete(imp_wave_4_estonia,i)%>%
+         select(-combine_cognitive)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD")
+score_bic_different_structure[14,i] <- score(wave_4_estonia_1.hc.bic, 
+      data=dataframe  , type = "bic")
+score_bde_different_structure[14,i] <-score(wave_4_estonia_1.hc.bic, 
+      data=dataframe  , type = "bde",iss=10)
+score_loglik_different_structure[14,i] <- score(wave_4_estonia_1.hc.bic, 
+      data=dataframe  , type = "loglik")
+}
+# hc.bic with second imputation
+set.seed(1)
+wave_4_estonia_2.hc.bic_boot_strength <- boot.strength(data=imp_wave_4_estonia_2, 
+              algorithm = "hc",algorithm.args = list( 
+                blacklist = myblacklist_AD_cognitive, 
+           whitelist = mywhitelist_AD_cognitive,          score="bic"))
+plot(wave_4_estonia_2.hc.bic_boot_strength)
+wave_4_estonia_2.hc.bic = averaged.network(
+  wave_4_estonia_2.hc.bic_boot_strength, threshold =
+    attr(wave_4_estonia_2.hc.bic_boot_strength,"threshold"))
+# Plot final BN model
+graphviz.plot(wave_4_estonia_2.hc.bic,main = 
+                "hc(bic,bootstrap) with second imputation")
+# calculate the score
+score_bic_different_structure[15,6] <- score(wave_4_estonia_2.hc.bic,  data=
+   eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+      type = "bic")
+score_bde_different_structure[15,6] <-score(wave_4_estonia_2.hc.bic,  data= 
+   eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+      type = "bde",iss=10)
+score_loglik_different_structure[15,6] <- score(wave_4_estonia_2.hc.bic,  data=
+   eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+      type = "loglik")
+for (i in 1:5){
+  dataframe <- complete(imp_wave_4_estonia,i)%>%
+         select(-combine_cognitive)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD")
+score_bic_different_structure[15,i] <- score(wave_4_estonia_2.hc.bic, 
+      data=dataframe  , type = "bic")
+score_bde_different_structure[15,i] <-score(wave_4_estonia_2.hc.bic, 
+      data=dataframe  , type = "bde",iss=10)
+score_loglik_different_structure[15,i] <- score(wave_4_estonia_2.hc.bic, 
+      data=dataframe  , type = "loglik")
+}
+```
+
+
+
+
+Use hill-climbing to determine the DAG (score="bde")
+```{r}
+# Use hill-climbing to determine the DAG (score="bde")
+# hc.bde with drop NA
+set.seed(1)
+wave_4_estonia_narm.hc.bde_boot_strength <- boot.strength(data=
+    eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+              algorithm = "hc",algorithm.args = list( 
+                blacklist = myblacklist_AD_cognitive, 
+               whitelist = mywhitelist_AD_cognitive,          score="bde"))
+plot(wave_4_estonia_narm.hc.bde_boot_strength)
+wave_4_estonia_narm.hc.bde = averaged.network(
+  wave_4_estonia_narm.hc.bde_boot_strength, threshold = 
+    attr(wave_4_estonia_narm.hc.bde_boot_strength,"threshold"))
+# Plot final BN model
+graphviz.plot(wave_4_estonia_narm.hc.bde,main = "hc(bde,bootstrap) with drop NA")
+# calculate the score
+score_bic_different_structure[16,6] <- score(wave_4_estonia_narm.hc.bde,    data= 
+       eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive,
+      type = "bic")
+score_bde_different_structure[16,6] <-score(wave_4_estonia_narm.hc.bde,     data= 
+       eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+      type = "bde",iss=10)
+score_loglik_different_structure[16,6] <- score(wave_4_estonia_narm.hc.bde,    data= 
+       eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive,
+      type = "loglik")
+for (i in 1:5){
+  dataframe <- complete(imp_wave_4_estonia,i)%>%
+         select(-combine_cognitive)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD")
+score_bic_different_structure[16,i] <- score(wave_4_estonia_narm.hc.bde, 
+      data=dataframe  , type = "bic")
+score_bde_different_structure[16,i] <-score(wave_4_estonia_narm.hc.bde, 
+      data=dataframe  , type = "bde",iss=10)
+score_loglik_different_structure[16,i] <- score(wave_4_estonia_narm.hc.bde, 
+      data=dataframe  , type = "loglik")
+}
+# hc.bde with first imputation
+set.seed(1)
+wave_4_estonia_1.hc.bde_boot_strength <- boot.strength(data=imp_wave_4_estonia_1, 
+              algorithm = "hc",algorithm.args = list( blacklist =
+                    myblacklist_AD_cognitive, 
+          whitelist = mywhitelist_AD_cognitive,                score="bde"))
+plot(wave_4_estonia_1.hc.bde_boot_strength)
+wave_4_estonia_1.hc.bde = averaged.network(
+  wave_4_estonia_1.hc.bde_boot_strength, threshold =
+    attr(wave_4_estonia_1.hc.bde_boot_strength,"threshold"))
+# Plot final BN model
+graphviz.plot(wave_4_estonia_1.hc.bde,main = 
+                "hc(bde,bootstrap) with first imputation")
+# calculate the score
+score_bic_different_structure[17,6] <- score(wave_4_estonia_1.hc.bde,       data= 
+     eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+      type = "bic")
+score_bde_different_structure[17,6] <-score(wave_4_estonia_1.hc.bde,        data=
+   eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+      type = "bde",iss=10)
+score_loglik_different_structure[17,6] <- score(wave_4_estonia_1.hc.bde,       data= 
+     eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+      type = "loglik")
+for (i in 1:5){
+  dataframe <- complete(imp_wave_4_estonia,i)%>%
+         select(-combine_cognitive)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD")
+score_bic_different_structure[17,i] <- score(wave_4_estonia_1.hc.bde, 
+      data=dataframe  , type = "bic")
+score_bde_different_structure[17,i] <-score(wave_4_estonia_1.hc.bde, 
+      data=dataframe  , type = "bde",iss=10)
+score_loglik_different_structure[17,i] <- score(wave_4_estonia_1.hc.bde, 
+      data=dataframe  , type = "loglik")
+}
+# hc.bde second imputation
+set.seed(1)
+wave_4_estonia_2.hc.bde_boot_strength <- boot.strength(data=imp_wave_4_estonia_2, 
+              algorithm = "hc",algorithm.args = list( 
+                blacklist = myblacklist_AD_cognitive,
+                  whitelist = mywhitelist_AD_cognitive,          score="bde"))
+plot(wave_4_estonia_2.hc.bde_boot_strength)
+wave_4_estonia_2.hc.bde = averaged.network(
+  wave_4_estonia_2.hc.bde_boot_strength, threshold = attr(
+    wave_4_estonia_2.hc.bde_boot_strength,"threshold"))
+# Plot final BN model
+graphviz.plot(wave_4_estonia_2.hc.bde,main = "hc(bde,bootstrap) with second imputation")
+# calculate the score
+score_bic_different_structure[18,6] <- score(wave_4_estonia_2.hc.bde, 
+      data= eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+      type = "bic")
+score_bde_different_structure[18,6] <-score(wave_4_estonia_2.hc.bde, 
+      data= eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+      type = "bde",iss=10)
+score_loglik_different_structure[18,6] <- score(wave_4_estonia_2.hc.bde, 
+      data= eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive, 
+      type = "loglik")
+for (i in 1:5){
+  dataframe <- complete(imp_wave_4_estonia,i)%>%
+         select(-combine_cognitive)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD")
+score_bic_different_structure[18,i] <- score(wave_4_estonia_2.hc.bde, 
+      data=dataframe  , type = "bic")
+score_bde_different_structure[18,i] <-score(wave_4_estonia_2.hc.bde, 
+      data=dataframe  , type = "bde",iss=10)
+score_loglik_different_structure[18,i] <- score(wave_4_estonia_2.hc.bde, 
+      data=dataframe  , type = "loglik")
+}
+```
+
+
+
+
+
+
+
+
+#### compare different structre
+compare the different dag by network score and k-fold cross-validation
+```{r}
+# find the max score
+bic_score_max_six_daaset <- apply(score_bic_different_structure,2,which.max)
+bde_score_max_six_daaset <- apply(score_bde_different_structure,2,which.max)
+loglik_score_max_six_daaset <- apply(score_loglik_different_structure,2,which.max)
+# the max score for bde is graph 18
+# the max score for bic is graph 18
+# the max score for loglik is graph 8
+# we need to compare the two graph to see what the difference?
+# graph 8 and 18
+graphviz.compare(wave_4_estonia.fast.iamb_1,wave_4_estonia_1.hc.bde,
+                 main =c("graph 8","graph 8 and 18") )
+#  try to compare them and find the better one
+# use bn.cv to compare them
+dag_8 <- wave_4_estonia.fast.iamb_1
+dag_18 <- wave_4_estonia_2.hc.bde
+# mean_loss function
+min_loss <- function(x,k=10){
+  loss<- numeric(k)
+  for (i in 1:k){
+    loss[i] <- x[[i]]$loss
+  }
+  loss_min <- min(loss)
+  loss_min
+}
+min_loss_matrix <- matrix(nrow = 2,ncol=6)
+set.seed(1)
+# calculate the mean loss
+dag_8_narm <-bn.cv(data=
+        eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive,
+                    bn=dag_8,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix[1,6] = min_loss(dag_8_narm)
+for (i in 1:5){
+  dataframe <- complete(imp_wave_4_estonia,i)%>%
+        dplyr:: select(-combine_cognitive)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM","EDUL", "AD")
+dag_8_ <-bn.cv(data=dataframe,
+                    bn=dag_8,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix [1,i] <- min_loss(dag_8_)
+}
+dag_18_narm <-bn.cv(data=
+      eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive,
+                    bn=dag_18,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix [2,6] <- min_loss(dag_18_narm)
+for (i in 1:5){
+  dataframe <- complete(imp_wave_4_estonia,i)%>%
+        dplyr:: select(-combine_cognitive)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM","EDUL", "AD")
+dag_18_ <-bn.cv(data=dataframe,
+                    bn=dag_18,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix [2,i] <- min_loss(dag_18_)
+}
+# find the minimum
+loss_min_six_daaset <- apply(min_loss_matrix,2,which.min)
+# the better one is the graph 18
+
+```
+
+
+
+#### check the independence (ci test)
+using ci test to find other edges
+```{r}
+# Plot final BN model
+graphviz.plot(dag_18,main =c("graph 18") )
+better_dag <- dag_18
+# from the plot the markov blanket for node AD only(VA,EDUL,DS)
+
+#check other risk factor (Age,DSNOD,BMI,DK,SMK,Sex,HAM,LWNP)
+
+ #the ci test is dependent so add new edge
+ci.test("AD", "DS", c("VA","EDUL"), test = "jt", data =
+         eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive)
+better_dag <- set.arc(better_dag,"DS","AD")
+
+
+
+# for Age
+#from the plot we can get Age is independent to AD if we know EDUL and VA 
+ci.test("AD", "Age", c("VA","EDUL","DS"), test = "jt", data =
+          eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive)
+ci.test("AD", "Age", c("VA","EDUL"), test = "jt", data =
+          eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive)
+# the ci test is dependent so add new edge
+better_dag <- set.arc(better_dag,"Age","AD")
+
+# for DS
+#from the plot we can get DS is independent to AD if we know EDUL,Age and VA 
+
+
+
+# for BMI
+#from the plot we can get BMI is independent to AD if we know EDUL,Age,DS and VA 
+ci.test("AD", "BMI", c("VA","EDUL","Age","DS"), test = "jt", data =
+          eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive)
+ci.test("AD", "BMI", c("VA","EDUL","DS"), test = "jt", data =
+          eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive)
+ci.test("AD", "BMI", c("VA","EDUL"), test = "jt", data =
+          eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive)
+better_dag <- set.arc(better_dag,"BMI","AD")
+
+# for SMK
+#from the plot we can get SMk is independent to AD if we know EDUL,Age,DS,VA and BMI
+ci.test("AD", "SMK", c("VA","EDUL","Age","DS","BMI"), test = "mi", data =
+          eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive)
+ci.test("AD", "SMK", c("VA","EDUL","Age","DS"), test = "mi", data =
+          eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive)
+ci.test("AD", "SMK", c("VA","EDUL","DS"), test = "mi", data =
+          eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive)
+ci.test("AD", "SMK", c("VA","EDUL"), test = "mi", data =
+          eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive)
+
+
+
+
+
+# for DK
+#from the plot we can get DK is independent to AD if we know EDUL,Age,DS,VA and BMI
+ci.test("AD", "DK", c("VA","EDUL","Age","DS","BMI"), test = "jt", data =
+          eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive)
+ci.test("AD", "DK", c("VA","EDUL","Age","DS"), test = "jt", data =
+          eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive)
+ci.test("AD", "DK", c("VA","EDUL","DS"), test = "jt", data =
+          eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive)
+ci.test("AD", "DK", c("VA","EDUL"), test = "jt", data =
+          eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive)
+
+
+
+# for Sex
+#from the plot we can get Sex is independent to AD if we know EDUL,Age,DS,VA and BMI
+ci.test("AD", "Sex", c("VA","EDUL","Age","DS","BMI"), test = "mi", data =
+          eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive)
+ci.test("AD", "Sex", c("VA","EDUL","Age","DS"), test = "mi", data =
+          eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive)
+ci.test("AD", "Sex", c("VA","EDUL","DS"), test = "mi", data =
+          eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive)
+ci.test("AD", "Sex", c("VA","EDUL"), test = "mi", data =
+          eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive)
+
+
+# for LWNP
+#from the plot we can get LWNP is independent to AD if we know EDUL,Age,DS,VA 
+ci.test("AD", "LWNP", c("VA","EDUL","Age","DS","BMI"), test = "jt", data =
+          eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive)
+ci.test("AD", "LWNP", c("VA","EDUL","Age","DS"), test = "jt", data =
+          eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive)
+ci.test("AD", "LWNP", c("VA","EDUL","DS"), test = "jt", data =
+          eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive)
+ci.test("AD", "LWNP", c("VA","EDUL"), test = "jt", data =
+          eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive)
+
+
+
+# for NOD
+#from the plot we can get NOD is independent to AD if we know EDUL,Age,DS,VA and BMI
+ci.test("AD", "NOD", c("VA","EDUL","Age","DS","BMI"), test = "jt", data =
+          eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive)
+ci.test("AD", "NOD", c("VA","EDUL","Age","DS"), test = "jt", data =
+          eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive)
+ci.test("AD", "NOD", c("VA","EDUL","DS"), test = "jt", data =
+          eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive)
+ci.test("AD", "NOD", c("VA","EDUL"), test = "jt", data =
+          eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive)
+
+# for HAM
+#from the plot we can get HAM is independent to AD if we know EDUL,Age,DS,VA and BMI
+ci.test("AD", "HAM", c("VA","EDUL","Age","DS","BMI"), test = "jt", data =
+          eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive)
+ci.test("AD", "HAM", c("VA","EDUL","Age","DS"), test = "jt", data =
+          eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive)
+ci.test("AD", "HAM", c("VA","EDUL","DS"), test = "jt", data =
+          eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive)
+ci.test("AD", "HAM", c("VA","EDUL"), test = "jt", data =
+          eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive)
+
+
+graphviz.plot(better_dag)
+
+```
+
+#### compare the edges using k-fold cross validation
+
+```{r}
+set.seed(4)
+better_dag <- dag_18
+better_dag_1_1 <-set.arc(better_dag,"Age","AD")
+better_dag_1_2 <-set.arc(better_dag,"DS","AD")
+better_dag_1_3 <-set.arc(better_dag,"BMI","AD")
+better_dag_2_1 <-set.arc(better_dag_1_1,"DS","AD")
+better_dag_2_2 <-set.arc(better_dag_1_2,"BMI","AD")
+better_dag_2_3 <-set.arc(better_dag_1_1,"BMI","AD")
+better_dag_3 <-set.arc(better_dag_2_1,"BMI","AD")
+min_loss_matrix_better <- matrix(nrow = 8,ncol=6)
+set.seed(1)
+# calculate the mean loss
+dag_18_narm <-bn.cv(data=
+        eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive,
+                    bn=dag_18,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better[1,6] = min_loss(dag_18_narm)
+for (i in 1:5){
+  dataframe <- complete(imp_wave_4_estonia,i)%>%
+        dplyr:: select(-combine_cognitive)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM","EDUL", "AD")
+dag_18_ <-bn.cv(data=dataframe,
+                    bn=dag_18,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better [1,i] <- min_loss(dag_18_)
+}
+
+
+better_dag_1_1_narm <-bn.cv(data=
+        eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive,
+                    bn=better_dag_1_1 ,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better[2,6] = min_loss(better_dag_1_1_narm)
+for (i in 1:5){
+  dataframe <- complete(imp_wave_4_estonia,i)%>%
+        dplyr:: select(-combine_cognitive)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM","EDUL", "AD")
+better_dag_1_1_ <-bn.cv(data=dataframe,
+                    bn=better_dag_1_1 ,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better [2,i] <- min_loss(better_dag_1_1_)
+}
+
+
+
+better_dag_1_2_narm <-bn.cv(data=
+        eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive,
+                    bn=better_dag_1_2,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better[3,6] = min_loss(better_dag_1_2_narm)
+for (i in 1:5){
+  dataframe <- complete(imp_wave_4_estonia,i)%>%
+        dplyr:: select(-combine_cognitive)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM","EDUL", "AD")
+better_dag_1_2_ <-bn.cv(data=dataframe,
+                    bn=better_dag_1_2,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better [3,i] <- min_loss(better_dag_1_2_)
+}
+
+better_dag_1_3_narm <-bn.cv(data=
+        eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive,
+                    bn=better_dag_1_3,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better[4,6] = min_loss(better_dag_1_3_narm)
+for (i in 1:5){
+  dataframe <- complete(imp_wave_4_estonia,i)%>%
+        dplyr:: select(-combine_cognitive)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM","EDUL", "AD")
+better_dag_1_3_ <-bn.cv(data=dataframe,
+                    bn=better_dag_1_3,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better [4,i] <- min_loss(better_dag_1_3_)
+}
+
+better_dag_2_1_narm <-bn.cv(data=
+        eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive,
+                    bn=better_dag_2_1,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better[5,6] = min_loss(better_dag_2_1_narm)
+for (i in 1:5){
+  dataframe <- complete(imp_wave_4_estonia,i)%>%
+        dplyr:: select(-combine_cognitive)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM","EDUL", "AD")
+better_dag_2_1_ <-bn.cv(data=dataframe,
+                    bn=better_dag_2_1,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better [5,i] <- min_loss(better_dag_2_1_)
+}
+
+better_dag_2_2_narm <-bn.cv(data=
+        eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive,
+                    bn=better_dag_2_2,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better[6,6] = min_loss(better_dag_2_2_narm)
+for (i in 1:5){
+  dataframe <- complete(imp_wave_4_estonia,i)%>%
+        dplyr:: select(-combine_cognitive)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM","EDUL", "AD")
+better_dag_2_2_ <-bn.cv(data=dataframe,
+                    bn=better_dag_2_2,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better [6,i] <- min_loss(better_dag_2_2_)
+}
+
+better_dag_2_3_narm <-bn.cv(data=
+        eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive,
+                    bn=better_dag_2_3,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better[7,6] = min_loss(better_dag_2_3_narm)
+for (i in 1:5){
+  dataframe <- complete(imp_wave_4_estonia,i)%>%
+        dplyr:: select(-combine_cognitive)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM","EDUL", "AD")
+better_dag_2_3_ <-bn.cv(data=dataframe,
+                    bn=better_dag_2_3,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better [7,i] <- min_loss(better_dag_2_3_)
+}
+
+better_dag_3_narm <-bn.cv(data=
+        eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive,
+                    bn=better_dag_3,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better[8,6] = min_loss(better_dag_3_narm)
+for (i in 1:5){
+  dataframe <- complete(imp_wave_4_estonia,i)%>%
+        dplyr:: select(-combine_cognitive)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM","EDUL", "AD")
+better_dag_3_ <-bn.cv(data=dataframe,
+                    bn=better_dag_3,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better [8,i] <- min_loss(better_dag_3_)
+}
+
+
+
+loss_min_six_daaset_better <- apply(min_loss_matrix_better,2,which.min)
+# only add age to ad
+
+
+
+
+
+```
+
+
+
+
+
+
+
+
+#### fit the model,check the external valiadation
+fit the model using different dataset
+```{r}
+set.seed(4)
+
+
+
+
+
+better_dag <- better_dag_1_1
+
+
+
+bn.bayes_NA = bn.fit(better_dag,data=
+        eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive,
+                    method = "bayes",iss=10)
+bn.bayes_narm = bn.cv(data=
+        eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive,
+                    bn=better_dag,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+bn.bayes_1 = bn.cv(data=imp_wave_4_estonia_1,
+                    bn=better_dag,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+bn.bayes_2 = bn.cv(data=imp_wave_4_estonia_2,
+                    bn=better_dag,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+bn.bayes_3 = bn.cv(data=imp_wave_4_estonia_3,
+                    bn=better_dag,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+bn.bayes_4 = bn.cv(data=imp_wave_4_estonia_4,
+                    bn=better_dag,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+bn.bayes_5 = bn.cv(data=imp_wave_4_estonia_5,
+                    bn=better_dag,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+
+
+find_min <- function(x,k=10){
+  a <- numeric(k)
+  for (i in 1:k){
+    a[i]<-x[[i]]$loss
+  }
+  index <- which.min(a)
+  index
+}
+
+# find the minimum index for 
+min_index_narm <- find_min(bn.bayes_narm)
+bn.bayes_narm_ <- bn.bayes_narm[[min_index_narm ]]
+min_index_1 <- find_min(bn.bayes_1)
+bn.bayes_1 <- bn.bayes_1[[min_index_1 ]]
+min_index_2 <- find_min(bn.bayes_2)
+bn.bayes_2 <- bn.bayes_2[[min_index_2 ]]
+min_index_3 <- find_min(bn.bayes_3)
+bn.bayes_3 <- bn.bayes_3[[min_index_3 ]]
+min_index_4 <- find_min(bn.bayes_4)
+bn.bayes_4 <- bn.bayes_4[[min_index_4 ]]
+min_index_5 <- find_min(bn.bayes_5)
+bn.bayes_5 <- bn.bayes_5[[min_index_5 ]]
+
+# change list to bn.fit object
+bn.bayes_narm <- bn.bayes_NA
+# fOr Sex
+bn.bayes_narm$Sex <- bn.bayes_narm_$fitted$Sex$prob
+# fOr Age
+bn.bayes_narm$Age <- bn.bayes_narm_$fitted$Age$prob
+# fOr SMK
+bn.bayes_narm$SMK <- bn.bayes_narm_$fitted$SMK$prob
+# fOr DK
+bn.bayes_narm$DK <- bn.bayes_narm_$fitted$DK$prob
+# fOr HAM
+bn.bayes_narm$HAM <- bn.bayes_narm_$fitted$HAM$prob
+# fOr LWNP
+bn.bayes_narm$LWNP <- bn.bayes_narm_$fitted$LWNP$prob
+# fOr DS
+bn.bayes_narm$DS <- bn.bayes_narm_$fitted$DS$prob
+# fOr EDUL
+bn.bayes_narm$EDUL <- bn.bayes_narm_$fitted$EDUL$prob
+# fOr VA
+bn.bayes_narm$VA <- bn.bayes_narm_$fitted$VA$prob
+# fOr NOD
+bn.bayes_narm$NOD <- bn.bayes_narm_$fitted$NOD$prob
+# fOr BMI
+bn.bayes_narm$BMI <- bn.bayes_narm_$fitted$BMI$prob
+# fOr AD
+bn.bayes_narm$AD <- bn.bayes_narm_$fitted$AD$prob
+
+
+
+# combine the 5 impute data estimate by average the estimate
+bn.bayes_imputed<- bn.bayes_NA
+# fOr Sex
+bn.bayes_imputed$Sex <- (bn.bayes_1$fitted$Sex$prob+ bn.bayes_2$fitted$Sex$prob+bn.bayes_3$fitted$Sex$prob+
+                         bn.bayes_4$fitted$Sex$prob+bn.bayes_5$fitted$Sex$prob)/5
+# fOr Age
+bn.bayes_imputed$Age <- (bn.bayes_1$fitted$Age$prob+ bn.bayes_2$fitted$Age$prob+bn.bayes_3$fitted$Age$prob+
+                         bn.bayes_4$fitted$Age$prob+bn.bayes_5$fitted$Age$prob)/5
+# fOr SMK
+bn.bayes_imputed$SMK <- (bn.bayes_1$fitted$SMK$prob+ bn.bayes_2$fitted$SMK$prob+bn.bayes_3$fitted$SMK$prob+
+                         bn.bayes_4$fitted$SMK$prob+bn.bayes_5$fitted$SMK$prob)/5
+# fOr DK
+bn.bayes_imputed$DK <- (bn.bayes_1$fitted$DK$prob+ bn.bayes_2$fitted$DK$prob+bn.bayes_3$fitted$DK$prob+
+                         bn.bayes_4$fitted$DK$prob+bn.bayes_5$fitted$DK$prob)/5
+# fOr HAM
+bn.bayes_imputed$HAM <- (bn.bayes_1$fitted$HAM$prob+ bn.bayes_2$fitted$HAM$prob+bn.bayes_3$fitted$HAM$prob+
+                         bn.bayes_4$fitted$HAM$prob+bn.bayes_5$fitted$HAM$prob)/5
+# fOr LWNP
+bn.bayes_imputed$LWNP <- (bn.bayes_1$fitted$LWNP$prob+ bn.bayes_2$fitted$LWNP$prob+bn.bayes_3$fitted$LWNP$prob+
+                         bn.bayes_4$fitted$LWNP$prob+bn.bayes_5$fitted$LWNP$prob)/5
+# fOr DS
+bn.bayes_imputed$DS <- (bn.bayes_1$fitted$DS$prob+ bn.bayes_2$fitted$DS$prob+bn.bayes_3$fitted$DS$prob+
+                         bn.bayes_4$fitted$DS$prob+bn.bayes_5$fitted$DS$prob)/5
+# fOr EDUL
+bn.bayes_imputed$EDUL <- (bn.bayes_1$fitted$EDUL$prob+ bn.bayes_2$fitted$EDUL$prob+bn.bayes_3$fitted$EDUL$prob+
+                         bn.bayes_4$fitted$EDUL$prob+bn.bayes_5$fitted$EDUL$prob)/5
+# fOr VA
+bn.bayes_imputed$VA <- (bn.bayes_1$fitted$VA$prob+ bn.bayes_2$fitted$VA$prob+bn.bayes_3$fitted$VA$prob+
+                         bn.bayes_4$fitted$VA$prob+bn.bayes_5$fitted$VA$prob)/5
+# fOr NOD
+bn.bayes_imputed$NOD <- (bn.bayes_1$fitted$NOD$prob+ bn.bayes_2$fitted$NOD$prob+bn.bayes_3$fitted$NOD$prob+
+                         bn.bayes_4$fitted$NOD$prob+bn.bayes_5$fitted$NOD$prob)/5
+# fOr BMI
+bn.bayes_imputed$BMI <- (bn.bayes_1$fitted$BMI$prob+ bn.bayes_2$fitted$BMI$prob+bn.bayes_3$fitted$BMI$prob+
+                         bn.bayes_4$fitted$BMI$prob+bn.bayes_5$fitted$BMI$prob)/5
+# fOr AD
+bn.bayes_imputed$AD <- (bn.bayes_1$fitted$AD$prob+ bn.bayes_2$fitted$AD$prob+bn.bayes_3$fitted$AD$prob+
+                         bn.bayes_4$fitted$AD$prob+bn.bayes_5$fitted$AD$prob)/5
+
+# the predict error
+set.seed(2)
+
+sum_a<-0
+sum_b<-0
+sum_c<-0
+for (i in 1:10){
+aaa<-predict(bn.bayes_imputed,"AD",eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive)
+bbb<-predict(bn.bayes_narm,"AD",eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive)
+ccc<-predict(bn.bayes_NA,"AD",eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive)
+l1 <-nrow(eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive)
+prob_a <- length(which(aaa!=eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive$AD))/l1
+prob_b <-length(which(bbb!=eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive$AD))/l1
+prob_c <-length(which(ccc!=eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive$AD))/l1
+sum_a <- sum_a+prob_a
+sum_b <- sum_b+prob_b
+sum_c <- sum_c+prob_c
+}
+cat(" bn.bayes_imputed error rate(drop na data set):",sum_a/10)
+cat("\n bn.bayes_narm error rate(drop na data set):",sum_b/10)
+cat("\n bn.bayes_NA error rate(drop na data set):",sum_c/10)
+
+
+
+# for the imputed data set
+
+sum_a_1<-0
+sum_b_1<-0
+sum_c_1<-0
+for (i in 1:10){
+aaa<-predict(bn.bayes_imputed,"AD",imp_wave_4_estonia_1)
+bbb<-predict(bn.bayes_narm,"AD",imp_wave_4_estonia_1)
+ccc<-predict(bn.bayes_NA,"AD",imp_wave_4_estonia_1)
+l1 <-nrow(imp_wave_4_estonia_1)
+prob_a <- length(which(aaa!=imp_wave_4_estonia_1$AD))/l1
+prob_b <-length(which(bbb!=imp_wave_4_estonia_1$AD))/l1
+prob_c <-length(which(ccc!=imp_wave_4_estonia_1$AD))/l1
+sum_a_1 <- sum_a_1+prob_a
+sum_b_1 <- sum_b_1+prob_b
+sum_c_1 <- sum_c_1+prob_c
+}
+sum_a_2<-0
+sum_b_2<-0
+sum_c_2<-0
+for (i in 1:10){
+aaa<-predict(bn.bayes_imputed,"AD",imp_wave_4_estonia_2)
+bbb<-predict(bn.bayes_narm,"AD",imp_wave_4_estonia_2)
+ccc<-predict(bn.bayes_NA,"AD",imp_wave_4_estonia_2)
+l1 <-nrow(imp_wave_4_estonia_2)
+prob_a <- length(which(aaa!=imp_wave_4_estonia_2$AD))/l1
+prob_b <-length(which(bbb!=imp_wave_4_estonia_2$AD))/l1
+prob_c <-length(which(ccc!=imp_wave_4_estonia_2$AD))/l1
+sum_a_2 <- sum_a_2+prob_a
+sum_b_2 <- sum_b_2+prob_b
+sum_c_2 <- sum_c_2+prob_c
+}
+sum_a_3<-0
+sum_b_3<-0
+sum_c_3<-0
+for (i in 1:10){
+aaa<-predict(bn.bayes_imputed,"AD",imp_wave_4_estonia_3)
+bbb<-predict(bn.bayes_narm,"AD",imp_wave_4_estonia_3)
+ccc<-predict(bn.bayes_NA,"AD",imp_wave_4_estonia_3)
+l1 <-nrow(imp_wave_4_estonia_3)
+prob_a <- length(which(aaa!=imp_wave_4_estonia_3$AD))/l1
+prob_b <-length(which(bbb!=imp_wave_4_estonia_3$AD))/l1
+prob_c <-length(which(ccc!=imp_wave_4_estonia_3$AD))/l1
+sum_a_3 <- sum_a_3+prob_a
+sum_b_3 <- sum_b_3+prob_b
+sum_c_3 <- sum_c_3+prob_c
+}
+sum_a_4<-0
+sum_b_4<-0
+sum_c_4<-0
+for (i in 1:10){
+aaa<-predict(bn.bayes_imputed,"AD",imp_wave_4_estonia_4)
+bbb<-predict(bn.bayes_narm,"AD",imp_wave_4_estonia_4)
+ccc<-predict(bn.bayes_NA,"AD",imp_wave_4_estonia_4)
+l1 <-nrow(imp_wave_4_estonia_4)
+prob_a <- length(which(aaa!=imp_wave_4_estonia_4$AD))/l1
+prob_b <-length(which(bbb!=imp_wave_4_estonia_4$AD))/l1
+prob_c <-length(which(ccc!=imp_wave_4_estonia_4$AD))/l1
+sum_a_4 <- sum_a_4+prob_a
+sum_b_4 <- sum_b_4+prob_b
+sum_c_4 <- sum_c_4+prob_c
+}
+sum_a_5<-0
+sum_b_5<-0
+sum_c_5<-0
+for (i in 1:10){
+aaa<-predict(bn.bayes_imputed,"AD",imp_wave_4_estonia_5)
+bbb<-predict(bn.bayes_narm,"AD",imp_wave_4_estonia_5)
+ccc<-predict(bn.bayes_NA,"AD",imp_wave_4_estonia_5)
+l1 <-nrow(imp_wave_4_estonia_5)
+prob_a <- length(which(aaa!=imp_wave_4_estonia_5$AD))/l1
+prob_b <-length(which(bbb!=imp_wave_4_estonia_5$AD))/l1
+prob_c <-length(which(ccc!=imp_wave_4_estonia_5$AD))/l1
+sum_a_5 <- sum_a_5+prob_a
+sum_b_5 <- sum_b_5+prob_b
+sum_c_5 <- sum_c_5+prob_c
+}
+
+
+prob_a_i <-(sum_a_1+sum_a_2+sum_a_3+sum_a_4+sum_a_5)/50
+prob_b_i <-(sum_b_1+sum_b_2+sum_b_3+sum_b_4+sum_b_5)/50
+prob_c_i <-(sum_c_1+sum_c_2+sum_c_3+sum_c_4+sum_c_5)/50
+cat("\n bn.bayes_imputed error rate(imputed data set):",prob_a_i)
+cat("\n bn.bayes_narm error rate(imputed na data set):",prob_b_i)
+cat("\n bn.bayes_NA error rate(imputed na data set):",prob_c_i)
+
+# the best is bn.bayes_imputed
+
+
+```
+
+
+
+
+use another wave's dataset to evaluate the external validation, and choose the better estimate
+```{r}
+# use another wave's dataset to evaluate the external validation 
+# compare bn.bayes_NA and bn.bayes_imputed
+eassy_share_important_variables_large60_wave_5_estonia <-
+  eassy_share_important_variables_large60_wave_5%>%
+  filter(country_iso==233)
+eassy_share_important_variables_large60_wave_5_estonia <- drop_na(eassy_share_important_variables_large60_wave_5_estonia )
+eassy_share_important_variables_large60_wave_5_estonia <- eassy_share_important_variables_large60_wave_5_estonia %>%
+   dplyr::select(-dementia_recall,-combine_cognitive,-combine_recall,-ID,-wave,-wavepart,-country_iso,-recall_1,-recall_2,
+                 -orienti,-numeracy_1,-numeracy_2)
+# change the column names to make it easy to understand
+colnames(eassy_share_important_variables_large60_wave_5_estonia) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL","AD")
+
+set.seed(4)
+
+sum_a<-0
+sum_b<-0
+sum_c<-0
+for (i in 1:10){
+aaa<-predict(bn.bayes_imputed,"AD",eassy_share_important_variables_large60_wave_5_estonia)
+bbb<-predict(bn.bayes_narm,"AD",eassy_share_important_variables_large60_wave_5_estonia)
+ccc<-predict(bn.bayes_NA,"AD",eassy_share_important_variables_large60_wave_5_estonia)
+
+l1 <-nrow(eassy_share_important_variables_large60_wave_5_estonia)
+prob_a <- length(which(aaa!=eassy_share_important_variables_large60_wave_5_estonia$AD))/l1
+prob_b <-length(which(bbb!=eassy_share_important_variables_large60_wave_5_estonia$AD))/l1
+prob_c <-length(which(ccc!=eassy_share_important_variables_large60_wave_5_estonia$AD))/l1
+sum_a <- sum_a+prob_a
+sum_b <- sum_b+prob_b
+sum_c <- sum_c+prob_c
+}
+cat(" bn.bayes_imputed error rate(drop na data set,wave 5):",sum_a/10)
+cat("\n bn.bayes_narm error rate(drop na data set,wave 5):",sum_b/10)
+cat("\n bn.bayes_NA error rate(drop na data set,wave 5):",sum_c/10)
+
+# the performance are similar bn.bayes_NA is better
+```
+
+
+
+#### prensent the model fit 
+```{r}
+graphviz.plot(better_dag)
+
+bn.fit.barchart(bn.bayes_NA$VA)
+# we can see older people do less vigorous activity
+bn.fit.barchart(bn.bayes_NA$EDUL)
+# we can see older people more low education level people
+#bn.fit.barchart(bn.bayes_NA$DS)
+# we can see female more depression
+#bn.fit.barchart(bn.bayes_NA$BMI)
+# smoking people are thinner 
+# more disease heavier 
+#bn.fit.barchart(bn.bayes_NA$AD)
+```
+
+
+
+
+
+
+
+
+
+the line plot
+
+```{r}
+p1 <- ggplot(mapping = aes(x = rep(seq(1:length(levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$Age))),3),
+                     y=matrix(t(bn.bayes_NA$AD$prob[,,1,1]), ncol =1), color = rep(levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$AD), each = length(levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$Age))))) + 
+  geom_point() +
+  geom_line() +
+  scale_x_discrete(breaks=seq(1:length(levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$Age))),
+        labels=levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$Age)) +
+  labs(x = "Age", y= "Conditional probability", color = "Cognitive score", title ="VA = [1,4), EDUL = [0,2)")
+
+p2 <- ggplot(mapping = aes(x = rep(seq(1:length(levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$Age))),3),
+                     y=matrix(t(bn.bayes_NA$AD$prob[,,2,1]), ncol =1), color = rep(levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$AD), each = length(levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$Age))))) + 
+  geom_point() +
+  geom_line() +
+  scale_x_discrete(breaks=seq(1:length(levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$Age))),
+        labels=levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$Age)) +
+  labs(x = "Age", y= "Conditional probability", color = "Cognitive score", title ="VA = [4,5), EDUL = [0,2)")
+
+
+p3 <- ggplot(mapping = aes(x = rep(seq(1:length(levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$Age))),3),
+                     y=matrix(t(bn.bayes_NA$AD$prob[,,1,2]), ncol =1), color = rep(levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$AD), each = length(levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$Age))))) + 
+  geom_point() +
+  geom_line() +
+  scale_x_discrete(breaks=seq(1:length(levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$Age))),
+        labels=levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$Age)) +
+  labs(x = "Age", y= "Conditional probability", color = "Cognitive score", title =" VA = [1,4), EDUL = [2,3)")
+
+p4 <- ggplot(mapping = aes(x = rep(seq(1:length(levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$Age))),3),
+                     y=matrix(t(bn.bayes_NA$AD$prob[,,2,2]), ncol =1), color = rep(levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$AD), each = length(levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$Age))))) + 
+  geom_point() +
+  geom_line() +
+  scale_x_discrete(breaks=seq(1:length(levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$Age))),
+        labels=levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$Age)) +
+  labs(x = "Age", y= "Conditional probability", color = "Cognitive score", title =" VA = [4,5), EDUL = [2,3)")
+
+
+
+grid.arrange(p1, p2, p3, p4, nrow = 2)
+```
+
+
+
+
+using polr to solve the non smooth
+
+```{r}
+library(MASS)
+polr.fit_1 =polr(AD ~ Age + EDUL+VA, data = imp_wave_4_estonia_1)
+polr.fit_2 =polr(AD ~ Age + EDUL+VA, data = imp_wave_4_estonia_2)
+polr.fit_3=polr(AD ~ Age + EDUL+VA, data = imp_wave_4_estonia_3)
+polr.fit_4 =polr(AD ~ Age + EDUL+VA, data = imp_wave_4_estonia_4)
+polr.fit_5 =polr(AD ~ Age + EDUL+VA, data = imp_wave_4_estonia_5)
+polr.list <- list(polr.fit_1,polr.fit_2,polr.fit_3,polr.fit_4,polr.fit_5)
+#pool.fit <-pool(polr.list)
+EDUL.lv = levels(imp_wave_4_estonia_1$EDUL)
+Age.lv = levels(imp_wave_4_estonia_1$Age)
+#DS.lv = levels(imp_wave_4_estonia_1$DS)
+#BMI.lv = levels(imp_wave_4_estonia_1$BMI)
+VA.lv = levels(imp_wave_4_estonia_1$VA)
+AD.lv = levels(imp_wave_4_estonia_1$AD)
+combos = data.frame(Age=rep(Age.lv,length(EDUL.lv)),
+                     VA=rep(VA.lv,each = length(Age.lv)),
+         EDUL=rep(EDUL.lv,each = length(Age.lv)*length(VA.lv)))
+distcsm_1 = predict(polr.fit_1, newdata= combos ,type="p")
+distcsm_2 = predict(polr.fit_2, newdata= combos ,type="p")
+distcsm_3 = predict(polr.fit_3, newdata= combos ,type="p")
+distcsm_4 = predict(polr.fit_4, newdata= combos ,type="p")
+distcsm_5 = predict(polr.fit_5, newdata= combos ,type="p")
+distcsm = (distcsm_1 +distcsm_2 +distcsm_3 +distcsm_4 +distcsm_5)/5
+distcs <- array(dim = c(length(AD.lv), length(Age.lv),length(VA.lv), length(EDUL.lv)), dimnames = list(AD = AD.lv, Age = Age.lv,VA = VA.lv,EDUL = EDUL.lv))
+distcs[,,,] <- array(t(distcsm), dim=c(length(AD.lv), length(Age.lv),length(VA.lv), length(EDUL.lv)))
+bn.bayes_NA_custom <- bn.bayes_NA
+bn.bayes_NA_custom$AD = distcs
+
+
+
+
+```
+
+
+
+
+
+
+re plot the line plot
+
+
+```{r}
+p1 <- ggplot(mapping = aes(x = rep(seq(1:length(levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$Age))),3),
+                     y=matrix(t(bn.bayes_NA_custom$AD$prob[,,1,1]), ncol =1), color = rep(levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$AD), each = length(levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$Age))))) + 
+  geom_point() +
+  geom_line() +
+  scale_x_discrete(breaks=seq(1:length(levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$Age))),
+        labels=levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$Age)) +
+  labs(x = "Age", y= "Conditional probability", color = "Cognitive score", title ="VA = [1,4), EDUL = [0,2)")
+
+p2 <- ggplot(mapping = aes(x = rep(seq(1:length(levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$Age))),3),
+                     y=matrix(t(bn.bayes_NA_custom$AD$prob[,,2,1]), ncol =1), color = rep(levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$AD), each = length(levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$Age))))) + 
+  geom_point() +
+  geom_line() +
+  scale_x_discrete(breaks=seq(1:length(levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$Age))),
+        labels=levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$Age)) +
+  labs(x = "Age", y= "Conditional probability", color = "Cognitive score", title ="VA = [4,5), EDUL = [0,2)")
+
+
+p3 <- ggplot(mapping = aes(x = rep(seq(1:length(levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$Age))),3),
+                     y=matrix(t(bn.bayes_NA_custom$AD$prob[,,1,2]), ncol =1), color = rep(levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$AD), each = length(levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$Age))))) + 
+  geom_point() +
+  geom_line() +
+  scale_x_discrete(breaks=seq(1:length(levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$Age))),
+        labels=levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$Age)) +
+  labs(x = "Age", y= "Conditional probability", color = "Cognitive score", title =" VA = [1,4), EDUL = [2,3)")
+
+p4 <- ggplot(mapping = aes(x = rep(seq(1:length(levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$Age))),3),
+                     y=matrix(t(bn.bayes_NA_custom$AD$prob[,,2,2]), ncol =1), color = rep(levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$AD), each = length(levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$Age))))) + 
+  geom_point() +
+  geom_line() +
+  scale_x_discrete(breaks=seq(1:length(levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$Age))),
+        labels=levels(eassy_share_important_variables_large60_wave_4_estonia_NA_AD_cognitive$Age)) +
+  labs(x = "Age", y= "Conditional probability", color = "Cognitive score", title =" VA = [4,5), EDUL = [2,3)")
+
+
+
+grid.arrange(p1, p2, p3, p4, nrow = 2)
+```
+
+
+test the new estimate by predicted error
+```{r}
+
+library(gRain)
+
+graphviz.chart(bn.bayes_NA_custom, grid = TRUE, main = "Original BN")
+#predictor error
+
+
+set.seed(4)
+
+sum_a<-0
+for (i in 1:10){
+aaa<-predict(bn.bayes_NA_custom,"AD",eassy_share_important_variables_large60_wave_5_estonia)
+
+l1 <-nrow(eassy_share_important_variables_large60_wave_5_estonia)
+prob_a <- length(which(aaa!=eassy_share_important_variables_large60_wave_5_estonia$AD))/l1
+sum_a <- sum_a+prob_a
+}
+cat("\n bn.bayes_NA_custom error rate(drop na data set,wave 5):",sum_a/10)
+
+
+```
+
+
+
+
+
+#### diagnosis 
+```{r}
+
+
+eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive_0_1 <-
+  eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive %>%
+   dplyr:: mutate(
+    new_AD = ifelse(AD<="(-1,9]",1,0)
+   ) %>%
+  dplyr:: select(VA,Age,DS,EDUL,AD,new_AD,BMI)
+
+
+  n <- nrow(eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive_0_1)
+  for (i in 1:n){
+    VA <- eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive_0_1$VA[i]
+    #DS <- eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive_0_1$DS[i]
+    EDUL <- eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive_0_1$EDUL[i]
+    Age <- eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive_0_1$Age[i]
+   # BMI <- eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive_0_1$BMI[i]
+    VA <- ifelse(VA<"[4,5)",1,2)
+   # BMI <- ifelse(BMI<"2",1,ifelse(BMI<"3",2,ifelse(BMI<"4",3,4)))
+   # DS <- ifelse(DS<="[0,2)",1,ifelse(DS<="[2,5)",2,ifelse(DS<="[5,8)",3,4)))
+    EDUL <- ifelse(EDUL<="[0,2)",1,ifelse(EDUL<="[2,3)",2,ifelse(EDUL<="[3,5)",3,4)))
+    Age <- ifelse(Age<="[60,65)",1,ifelse(Age<="[65,70)",2,ifelse(Age<="[75,80)",3,ifelse(Age<="[80,85)",4,ifelse(Age<="[85,90)",5,6)))))
+    eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive_0_1$pred[i]<-bn.bayes_NA_custom$AD$prob[1,Age,VA,EDUL]
+  }
+
+library(predtools)
+# plot calibration 
+calibration_plot(data = eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive_0_1, obs = "new_AD", pred = "pred", title = "Calibration plot for development data")
+
+# plot ROC
+library(ROCR)
+pred <- prediction(eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive_0_1$pred, eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive_0_1$new_AD)
+perf <- performance(pred,"tpr","fpr")
+plot(perf,colorize=TRUE)
+library(pROC)
+auc(eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive_0_1$new_AD,eassy_share_important_variables_large60_wave_4_estonia_narm_AD_cognitive_0_1$pred)
+
+
+
+
+```
+
+
+### multiple wave with 6 countries
+```{r}
+# Use incremental association Markov blanket to learn the DAG
+eassy_share_important_variables_large60_6countries_AD_recall <-eassy_share_important_variables_large60_6countries %>%
+  dplyr::select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(eassy_share_important_variables_large60_6countries_AD_recall) <-
+  c("Sex","Age","LWNP","NOD","DS","BMI","SMK","DK",
+    "VA","HAM","EDUL", "AD","C")
+# Create blacklist of edges
+myblacklist_AD_recall_1 =  tiers2blacklist(list("Sex", "Age", 
+    c("LWNP","NOD","DS","BMI","SMK","DK", "VA","HAM","EDUL")))
+myblacklist_AD_recall_2 = tiers2blacklist(list(
+    c("LWNP","NOD","BMI","SMK","DK", "VA","HAM","EDUL","Sex","Age","C","DS"),"AD"))
+myblacklist_AD_recall_3 =  tiers2blacklist(list("C", 
+    c("LWNP","NOD","DS","BMI","SMK","DK", "VA","HAM","EDUL","Sex", "Age")))
+myblacklist_AD_recall = rbind(myblacklist_AD_recall_1,  myblacklist_AD_recall_2,
+                              myblacklist_AD_recall_3)
+# Create whitelist of edges
+# Create blacklist of edges
+mywhitelist_AD_recall = matrix(c(
+                   "EDUL","AD"
+                   ), 
+                 byrow = TRUE, ncol=2, dimnames =list(NULL,c("from","to")))
+#drop NA
+eassy_share_important_variables_large60_6countries_narm_AD_recall = 
+  drop_na(eassy_share_important_variables_large60_6countries_AD_recall)
+#imputations 
+for (i in 1:5){
+  nn <- paste0("imp_6countries_",as.character(i),sep="")
+  dataframe <- complete(imp_6countries,i)%>%
+       dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD","C")
+assign(nn,dataframe )
+}
+score_bic_different_structure_new <- matrix(nrow = 18,ncol=6)
+score_bde_different_structure_new <- matrix(nrow = 18,ncol=6)
+score_loglik_different_structure_new <- matrix(nrow = 18,ncol=6)
+```
+
+
+
+#### structual learning by constraint
+
+by gs
+```{r}
+set.seed(4)
+#use gs
+#gs with NA
+six_countries.gs =gs(
+  eassy_share_important_variables_large60_6countries_AD_recall, 
+  blacklist = myblacklist_AD_recall, whitelist = mywhitelist_AD_recall)
+#plot
+graphviz.plot(six_countries.gs,main = "gs with NA")
+# calculate the score
+score_bic_different_structure_new[1,6] <- score(six_countries.gs, data= 
+      eassy_share_important_variables_large60_6countries_narm_AD_recall, 
+     type = "bic")
+score_bde_different_structure_new[1,6] <-score(six_countries.gs,  data= 
+      eassy_share_important_variables_large60_6countries_narm_AD_recall, 
+      type = "bde",iss=10)
+score_loglik_different_structure_new[1,6] <- score(six_countries.gs, data= 
+     eassy_share_important_variables_large60_6countries_narm_AD_recall, 
+     type = "loglik")
+
+for (i in 1:5){
+   dataframe <- complete(imp_6countries,i)%>%
+        dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD","C")
+score_bic_different_structure_new[1,i] <- score(six_countries.gs, 
+      data=dataframe  , type = "bic")
+score_bde_different_structure_new[1,i] <-score(six_countries.gs, 
+      data=dataframe  , type = "bde",iss=10)
+score_loglik_different_structure_new[1,i] <- score(six_countries.gs, 
+      data=dataframe  , type = "loglik")
+}
+
+
+
+
+# gs with first imputation
+set.seed(1)
+six_countries.gs_1_boot_strength =boot.strength(
+           data=imp_6countries_1, 
+  algorithm = "gs",algorithm.args = list( blacklist = myblacklist_AD_recall, 
+                   whitelist = mywhitelist_AD_recall,       test="mi"))
+plot(six_countries.gs_1_boot_strength)
+six_countries.gs_1 <- averaged.network(six_countries.gs_1_boot_strength , 
+       threshold =attr(six_countries.gs_1_boot_strength,"threshold"))
+# plot
+graphviz.plot(six_countries.gs_1,main = "gs(bootstrap) with second imputation")
+# calculate the score
+score_bic_different_structure_new[2,6] <- score(six_countries.gs_1,  data= 
+      eassy_share_important_variables_large60_6countries_narm_AD_recall,
+      type = "bic")
+score_bde_different_structure_new[2,6] <-score(six_countries.gs_1,   data= 
+      eassy_share_important_variables_large60_6countries_narm_AD_recall,
+      type = "bde",iss=10)
+score_loglik_different_structure_new[2,6] <-score(six_countries.gs_1,   data= 
+      eassy_share_important_variables_large60_6countries_narm_AD_recall,
+      type = "loglik")
+for (i in 1:5){
+   dataframe <- complete(imp_6countries,i)%>%
+         dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD","C")
+score_bic_different_structure_new[2,i] <- score(six_countries.gs_1, 
+      data=dataframe  , type = "bic")
+score_bde_different_structure_new[2,i] <-score(six_countries.gs_1, 
+      data=dataframe  , type = "bde",iss=10)
+score_loglik_different_structure_new[2,i] <- score(six_countries.gs_1, 
+      data=dataframe  , type = "loglik")
+}
+
+# gs with second imputation
+set.seed(1)
+six_countries.gs_2_boot_strength =boot.strength(
+           data=imp_6countries_2, 
+  algorithm = "gs",algorithm.args = list( blacklist = myblacklist_AD_recall, 
+                   whitelist = mywhitelist_AD_recall,       test="mi"))
+plot(six_countries.gs_2_boot_strength)
+six_countries.gs_2 <- averaged.network(six_countries.gs_2_boot_strength , 
+       threshold =attr(six_countries.gs_2_boot_strength,"threshold"))
+# plot
+graphviz.plot(six_countries.gs_2,main = "gs(bootstrap) with second imputation")
+# calculate the score
+score_bic_different_structure_new[3,6] <- score(six_countries.gs_2,  data= 
+      eassy_share_important_variables_large60_6countries_narm_AD_recall,
+      type = "bic")
+score_bde_different_structure_new[3,6] <-score(six_countries.gs_2,   data= 
+      eassy_share_important_variables_large60_6countries_narm_AD_recall,
+      type = "bde",iss=10)
+score_loglik_different_structure_new[3,6] <-score(six_countries.gs_2,   data= 
+      eassy_share_important_variables_large60_6countries_narm_AD_recall,
+      type = "loglik")
+for (i in 1:5){
+   dataframe <- complete(imp_6countries,i)%>%
+         dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD","C")
+score_bic_different_structure_new[3,i] <- score(six_countries.gs_2, 
+      data=dataframe  , type = "bic")
+score_bde_different_structure_new[3,i] <-score(six_countries.gs_2, 
+      data=dataframe  , type = "bde",iss=10)
+score_loglik_different_structure_new[3,i] <- score(six_countries.gs_2, 
+      data=dataframe  , type = "loglik")
+}
+```
+
+
+by iamb
+
+
+```{r}
+set.seed(4)
+#use iamb
+#iamb with NA
+six_countries.iamb =iamb(
+  eassy_share_important_variables_large60_6countries_AD_recall, 
+  blacklist = myblacklist_AD_recall, whitelist = mywhitelist_AD_recall,
+                          test="mi")
+#plot
+graphviz.plot(six_countries.iamb,main = "iamb with NA")
+# calculate the score
+score_bic_different_structure_new[4,6] <- score(six_countries.iamb, data= 
+      eassy_share_important_variables_large60_6countries_narm_AD_recall, 
+     type = "bic")
+score_bde_different_structure_new[4,6] <-score(six_countries.iamb,  data= 
+      eassy_share_important_variables_large60_6countries_narm_AD_recall, 
+      type = "bde",iss=10)
+score_loglik_different_structure_new[4,6] <- score(six_countries.iamb, data= 
+     eassy_share_important_variables_large60_6countries_narm_AD_recall, 
+     type = "loglik")
+
+for (i in 1:5){
+   dataframe <- complete(imp_6countries,i)%>%
+         dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD","C")
+score_bic_different_structure_new[4,i] <- score(six_countries.iamb, 
+      data=dataframe  , type = "bic")
+score_bde_different_structure_new[4,i] <-score(six_countries.iamb, 
+      data=dataframe  , type = "bde",iss=10)
+score_loglik_different_structure_new[4,i] <- score(six_countries.iamb, 
+      data=dataframe  , type = "loglik")
+}
+
+
+
+
+# iamb with first imputation
+set.seed(1)
+six_countries.iamb_1_boot_strength =boot.strength(
+           data=imp_6countries_1, 
+  algorithm = "iamb",algorithm.args = list( blacklist = myblacklist_AD_recall, 
+                   whitelist = mywhitelist_AD_recall,       test="mi"))
+plot(six_countries.iamb_1_boot_strength)
+six_countries.iamb_1 <- averaged.network(six_countries.iamb_1_boot_strength , 
+       threshold =attr(six_countries.iamb_1_boot_strength,"threshold"))
+# plot
+graphviz.plot(six_countries.iamb_1,main = "iamb(bootstrap) with second imputation")
+# calculate the score
+score_bic_different_structure_new[5,6] <- score(six_countries.iamb_1,  data= 
+      eassy_share_important_variables_large60_6countries_narm_AD_recall,
+      type = "bic")
+score_bde_different_structure_new[5,6] <-score(six_countries.iamb_1,   data= 
+      eassy_share_important_variables_large60_6countries_narm_AD_recall,
+      type = "bde",iss=10)
+score_loglik_different_structure_new[5,6] <-score(six_countries.iamb_1,   data= 
+      eassy_share_important_variables_large60_6countries_narm_AD_recall,
+      type = "loglik")
+for (i in 1:5){
+   dataframe <- complete(imp_6countries,i)%>%
+         dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD","C")
+score_bic_different_structure_new[5,i] <- score(six_countries.iamb_1, 
+      data=dataframe  , type = "bic")
+score_bde_different_structure_new[5,i] <-score(six_countries.iamb_1, 
+      data=dataframe  , type = "bde",iss=10)
+score_loglik_different_structure_new[5,i] <- score(six_countries.iamb_1, 
+      data=dataframe  , type = "loglik")
+}
+
+# iamb with second imputation
+set.seed(1)
+six_countries.iamb_2_boot_strength =boot.strength(
+           data=imp_6countries_2, 
+  algorithm = "iamb",algorithm.args = list( blacklist = myblacklist_AD_recall, 
+                   whitelist = mywhitelist_AD_recall,       test="mi"))
+plot(six_countries.iamb_2_boot_strength)
+six_countries.iamb_2 <- averaged.network(six_countries.iamb_2_boot_strength , 
+       threshold =attr(six_countries.iamb_2_boot_strength,"threshold"))
+# plot
+graphviz.plot(six_countries.iamb_2,main = "iamb(bootstrap) with second imputation")
+# calculate the score
+score_bic_different_structure_new[6,6] <- score(six_countries.iamb_2,  data= 
+      eassy_share_important_variables_large60_6countries_narm_AD_recall,
+      type = "bic")
+score_bde_different_structure_new[6,6] <-score(six_countries.iamb_2,   data= 
+      eassy_share_important_variables_large60_6countries_narm_AD_recall,
+      type = "bde",iss=10)
+score_loglik_different_structure_new[6,6] <-score(six_countries.iamb_2,   data= 
+      eassy_share_important_variables_large60_6countries_narm_AD_recall,
+      type = "loglik")
+for (i in 1:5){
+   dataframe <- complete(imp_6countries,i)%>%
+         dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD","C")
+score_bic_different_structure_new[6,i] <- score(six_countries.iamb_2, 
+      data=dataframe  , type = "bic")
+score_bde_different_structure_new[6,i] <-score(six_countries.iamb_2, 
+      data=dataframe  , type = "bde",iss=10)
+score_loglik_different_structure_new[6,i] <- score(six_countries.iamb_2, 
+      data=dataframe  , type = "loglik")
+}
+
+```
+
+
+by fast.iamb
+
+```{r}
+set.seed(4)
+#use fast.iamb
+#fast.iamb with NA
+six_countries.fast.iamb =fast.iamb(
+  eassy_share_important_variables_large60_6countries_AD_recall, 
+  blacklist = myblacklist_AD_recall, whitelist = mywhitelist_AD_recall,
+                          test="mi")
+#plot
+graphviz.plot(six_countries.fast.iamb,main = "fast.iamb with NA")
+
+# calculate the score
+score_bic_different_structure_new[7,6] <- score(six_countries.fast.iamb, data= 
+      eassy_share_important_variables_large60_6countries_narm_AD_recall, 
+     type = "bic")
+score_bde_different_structure_new[7,6] <- score(six_countries.fast.iamb, data= 
+      eassy_share_important_variables_large60_6countries_narm_AD_recall,  
+      type = "bde",iss=10)
+score_loglik_different_structure_new[7,6] <- score(six_countries.fast.iamb, data= 
+     eassy_share_important_variables_large60_6countries_narm_AD_recall, 
+     type = "loglik")
+
+for (i in 1:5){
+   dataframe <- complete(imp_6countries,i)%>%
+         dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD","C")
+score_bic_different_structure_new[7,i] <- score(six_countries.fast.iamb, 
+      data=dataframe  , type = "bic")
+score_bde_different_structure_new[7,i] <-score(six_countries.fast.iamb, 
+      data=dataframe  , type = "bde",iss=10)
+score_loglik_different_structure_new[7,i] <- score(six_countries.fast.iamb, 
+      data=dataframe  , type = "loglik")
+}
+
+
+
+
+# fast.iamb with first imputation
+set.seed(1)
+six_countries.fast.iamb_1_boot_strength =boot.strength(
+           data=imp_6countries_1, 
+  algorithm = "fast.iamb",algorithm.args = list( blacklist = myblacklist_AD_recall, 
+                   whitelist = mywhitelist_AD_recall,       test="mi"))
+plot(six_countries.fast.iamb_1_boot_strength)
+six_countries.fast.iamb_1 <- averaged.network(six_countries.fast.iamb_1_boot_strength , 
+       threshold =attr(six_countries.fast.iamb_1_boot_strength,"threshold"))
+# plot
+graphviz.plot(six_countries.fast.iamb_1,main = "fast.iamb(bootstrap) with second imputation")
+# calculate the score
+score_bic_different_structure_new[8,6] <- score(six_countries.fast.iamb_1,  data= 
+      eassy_share_important_variables_large60_6countries_narm_AD_recall,
+      type = "bic")
+score_bde_different_structure_new[8,6] <-score(six_countries.fast.iamb_1,   data= 
+      eassy_share_important_variables_large60_6countries_narm_AD_recall,
+      type = "bde",iss=10)
+score_loglik_different_structure_new[8,6] <-score(six_countries.fast.iamb_1,   data= 
+      eassy_share_important_variables_large60_6countries_narm_AD_recall,
+      type = "loglik")
+for (i in 1:5){
+   dataframe <- complete(imp_6countries,i)%>%
+         dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD","C")
+score_bic_different_structure_new[8,i] <- score(six_countries.fast.iamb_1, 
+      data=dataframe  , type = "bic")
+score_bde_different_structure_new[8,i] <-score(six_countries.fast.iamb_1, 
+      data=dataframe  , type = "bde",iss=10)
+score_loglik_different_structure_new[8,i] <- score(six_countries.fast.iamb_1, 
+      data=dataframe  , type = "loglik")
+}
+
+# fast.iamb with second imputation
+set.seed(1)
+six_countries.fast.iamb_2_boot_strength =boot.strength(
+           data=imp_6countries_2, 
+  algorithm = "fast.iamb",algorithm.args = list( blacklist = myblacklist_AD_recall, 
+                   whitelist = mywhitelist_AD_recall,       test="mi"))
+plot(six_countries.fast.iamb_2_boot_strength)
+six_countries.fast.iamb_2 <- averaged.network(six_countries.fast.iamb_2_boot_strength , 
+       threshold =attr(six_countries.fast.iamb_2_boot_strength,"threshold"))
+# plot
+graphviz.plot(six_countries.fast.iamb_2,main = "fast.iamb(bootstrap) with second imputation")
+# calculate the score
+score_bic_different_structure_new[9,6] <- score(six_countries.fast.iamb_2,  data= 
+      eassy_share_important_variables_large60_6countries_narm_AD_recall,
+      type = "bic")
+score_bde_different_structure_new[9,6] <-score(six_countries.fast.iamb_2,   data= 
+      eassy_share_important_variables_large60_6countries_narm_AD_recall,
+      type = "bde",iss=10)
+score_loglik_different_structure_new[9,6] <-score(six_countries.fast.iamb_2,   data= 
+      eassy_share_important_variables_large60_6countries_narm_AD_recall,
+      type = "loglik")
+for (i in 1:5){
+   dataframe <- complete(imp_6countries,i)%>%
+         dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD","C")
+score_bic_different_structure_new[9,i] <- score(six_countries.fast.iamb_2, 
+      data=dataframe  , type = "bic")
+score_bde_different_structure_new[9,i] <-score(six_countries.fast.iamb_2, 
+      data=dataframe  , type = "bde",iss=10)
+score_loglik_different_structure_new[9,i] <- score(six_countries.fast.iamb_2, 
+      data=dataframe  , type = "loglik")
+}
+
+```
+
+
+by inter.iamb
+
+```{r}
+set.seed(4)
+#use inter.iamb
+#inter.iamb with NA
+six_countries.inter.iamb =inter.iamb(
+  eassy_share_important_variables_large60_6countries_AD_recall, 
+  blacklist = myblacklist_AD_recall, whitelist = mywhitelist_AD_recall,
+                          test="mi")
+#plot
+graphviz.plot(six_countries.inter.iamb,main = "inter.iamb with NA")
+# calculate the score
+score_bic_different_structure_new[10,6] <- score(six_countries.inter.iamb, data= 
+      eassy_share_important_variables_large60_6countries_narm_AD_recall, 
+     type = "bic")
+score_bde_different_structure_new[10,6] <-score(six_countries.inter.iamb,  data= 
+      eassy_share_important_variables_large60_6countries_narm_AD_recall, 
+      type = "bde",iss=10)
+score_loglik_different_structure_new[10,6] <- score(six_countries.inter.iamb, data= 
+     eassy_share_important_variables_large60_6countries_narm_AD_recall, 
+     type = "loglik")
+
+for (i in 1:5){
+   dataframe <- complete(imp_6countries,i)%>%
+         dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD","C")
+score_bic_different_structure_new[10,i] <- score(six_countries.inter.iamb, 
+      data=dataframe  , type = "bic")
+score_bde_different_structure_new[10,i] <-score(six_countries.inter.iamb, 
+      data=dataframe  , type = "bde",iss=10)
+score_loglik_different_structure_new[10,i] <- score(six_countries.inter.iamb, 
+      data=dataframe  , type = "loglik")
+}
+
+
+
+
+# inter.iamb with first imputation
+set.seed(1)
+six_countries.inter.iamb_1_boot_strength =boot.strength(
+           data=imp_6countries_1, 
+  algorithm = "inter.iamb",algorithm.args = list( blacklist = myblacklist_AD_recall, 
+                   whitelist = mywhitelist_AD_recall,       test="mi"))
+plot(six_countries.inter.iamb_1_boot_strength)
+six_countries.inter.iamb_1 <- averaged.network(six_countries.inter.iamb_1_boot_strength , 
+       threshold =attr(six_countries.inter.iamb_1_boot_strength,"threshold"))
+# plot
+graphviz.plot(six_countries.inter.iamb_1,main = "inter.iamb(bootstrap) with second imputation")
+# calculate the score
+score_bic_different_structure_new[11,6] <- score(six_countries.inter.iamb_1,  data= 
+      eassy_share_important_variables_large60_6countries_narm_AD_recall,
+      type = "bic")
+score_bde_different_structure_new[11,6] <-score(six_countries.inter.iamb_1,   data= 
+      eassy_share_important_variables_large60_6countries_narm_AD_recall,
+      type = "bde",iss=10)
+score_loglik_different_structure_new[11,6] <-score(six_countries.inter.iamb_1,   data= 
+      eassy_share_important_variables_large60_6countries_narm_AD_recall,
+      type = "loglik")
+for (i in 1:5){
+   dataframe <- complete(imp_6countries,i)%>%
+         dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD","C")
+score_bic_different_structure_new[11,i] <- score(six_countries.inter.iamb_1, 
+      data=dataframe  , type = "bic")
+score_bde_different_structure_new[11,i] <-score(six_countries.inter.iamb_1, 
+      data=dataframe  , type = "bde",iss=10)
+score_loglik_different_structure_new[11,i] <- score(six_countries.inter.iamb_1, 
+      data=dataframe  , type = "loglik")
+}
+
+# inter.iamb with second imputation
+set.seed(1)
+six_countries.inter.iamb_2_boot_strength =boot.strength(
+           data=imp_6countries_2, 
+  algorithm = "inter.iamb",algorithm.args = list( blacklist = myblacklist_AD_recall, 
+                   whitelist = mywhitelist_AD_recall,       test="mi"))
+plot(six_countries.inter.iamb_2_boot_strength)
+six_countries.inter.iamb_2 <- averaged.network(six_countries.inter.iamb_2_boot_strength , 
+       threshold =attr(six_countries.inter.iamb_2_boot_strength,"threshold"))
+# plot
+graphviz.plot(six_countries.inter.iamb_2,main = "inter.iamb(bootstrap) with second imputation")
+# calculate the score
+score_bic_different_structure_new[12,6] <- score(six_countries.inter.iamb_2,  data= 
+      eassy_share_important_variables_large60_6countries_narm_AD_recall,
+      type = "bic")
+score_bde_different_structure_new[12,6] <-score(six_countries.inter.iamb_2,   data= 
+      eassy_share_important_variables_large60_6countries_narm_AD_recall,
+      type = "bde",iss=10)
+score_loglik_different_structure_new[12,6] <-score(six_countries.inter.iamb_2,   data= 
+      eassy_share_important_variables_large60_6countries_narm_AD_recall,
+      type = "loglik")
+for (i in 1:5){
+   dataframe <- complete(imp_6countries,i)%>%
+         dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD","C")
+score_bic_different_structure_new[12,i] <- score(six_countries.inter.iamb_2, 
+      data=dataframe  , type = "bic")
+score_bde_different_structure_new[12,i] <-score(six_countries.inter.iamb_2, 
+      data=dataframe  , type = "bde",iss=10)
+score_loglik_different_structure_new[12,i] <- score(six_countries.inter.iamb_2, 
+      data=dataframe  , type = "loglik")
+}
+
+```
+
+
+
+
+
+
+
+
+#### structual learning by score methods
+hc by bic score
+```{r}
+# Use hill-climbing to determine the DAG (score="bic")
+# hc.bic with drop NA
+set.seed(1)
+six_countries_narm.hc.bic_boot_strength <- boot.strength(data=
+    eassy_share_important_variables_large60_6countries_narm_AD_recall, 
+algorithm = "hc",algorithm.args = list( blacklist = myblacklist_AD_recall, 
+                          whitelist = mywhitelist_AD_recall,   score="bic"))
+plot(six_countries_narm.hc.bic_boot_strength)
+six_countries_narm.hc.bic = averaged.network(
+  six_countries_narm.hc.bic_boot_strength, threshold = 
+    attr(six_countries_narm.hc.bic_boot_strength,"threshold"))
+# Plot final BN model
+graphviz.plot(six_countries_narm.hc.bic,main = "hc(bic,bootstrap) with drop NA")
+
+
+# calculate the score
+score_bic_different_structure_new[13,6] <- score(six_countries_narm.hc.bic,  data= 
+   eassy_share_important_variables_large60_6countries_narm_AD_recall, 
+      type = "bic")
+score_bde_different_structure_new[13,6] <-score(six_countries_narm.hc.bic,  data=
+  eassy_share_important_variables_large60_6countries_narm_AD_recall, 
+      type = "bde",iss=10)
+score_loglik_different_structure_new[13,6] <- score(six_countries_narm.hc.bic,  data= 
+   eassy_share_important_variables_large60_6countries_narm_AD_recall, 
+      type = "loglik")
+for (i in 1:5){
+  dataframe <- complete(imp_6countries,i)%>%
+         dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD","C")
+score_bic_different_structure_new[13,i] <- score(six_countries_narm.hc.bic, 
+      data=dataframe  , type = "bic")
+score_bde_different_structure_new[13,i] <-score(six_countries_narm.hc.bic, 
+      data=dataframe  , type = "bde",iss=10)
+score_loglik_different_structure_new[13,i] <- score(six_countries_narm.hc.bic, 
+      data=dataframe  , type = "loglik")
+}
+# Use hill-climbing to determine the DAG (score="bic")
+# hc.bic with first imputatiom
+set.seed(1)
+six_countries_1.hc.bic_boot_strength <- boot.strength(data=imp_6countries_1, 
+algorithm = "hc",algorithm.args = list( blacklist = myblacklist_AD_recall, 
+                          whitelist = mywhitelist_AD_recall,   score="bic"))
+plot(six_countries_1.hc.bic_boot_strength)
+six_countries_1.hc.bic = averaged.network(
+  six_countries_1.hc.bic_boot_strength, threshold = 
+    attr(six_countries_1.hc.bic_boot_strength,"threshold"))
+# Plot final BN model
+graphviz.plot(six_countries_1.hc.bic,main = "hc(bic,bootstrap) with drop NA")
+
+
+# calculate the score
+score_bic_different_structure_new[14,6] <- score(six_countries_1.hc.bic,  data= 
+   eassy_share_important_variables_large60_6countries_narm_AD_recall, 
+      type = "bic")
+score_bde_different_structure_new[14,6] <-score(six_countries_1.hc.bic,  data=
+  eassy_share_important_variables_large60_6countries_narm_AD_recall, 
+      type = "bde",iss=10)
+score_loglik_different_structure_new[14,6] <- score(six_countries_1.hc.bic,  data= 
+   eassy_share_important_variables_large60_6countries_narm_AD_recall, 
+      type = "loglik")
+for (i in 1:5){
+  dataframe <- complete(imp_6countries,i)%>%
+         dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD","C")
+score_bic_different_structure_new[14,i] <- score(six_countries_1.hc.bic, 
+      data=dataframe  , type = "bic")
+score_bde_different_structure_new[14,i] <-score(six_countries_1.hc.bic, 
+      data=dataframe  , type = "bde",iss=10)
+score_loglik_different_structure_new[14,i] <- score(six_countries_1.hc.bic, 
+      data=dataframe  , type = "loglik")
+}
+# hc.bic with second imputation
+set.seed(1)
+six_countries_2.hc.bic_boot_strength <- boot.strength(data=imp_6countries_2, 
+algorithm = "hc",algorithm.args = list( blacklist = myblacklist_AD_recall, 
+                          whitelist = mywhitelist_AD_recall,   score="bic"))
+plot(six_countries_2.hc.bic_boot_strength)
+six_countries_2.hc.bic = averaged.network(
+  six_countries_2.hc.bic_boot_strength, threshold = 
+    attr(six_countries_2.hc.bic_boot_strength,"threshold"))
+# Plot final BN model
+graphviz.plot(six_countries_2.hc.bic,main = "hc(bic,bootstrap) with drop NA")
+
+
+# calculate the score
+score_bic_different_structure_new[15,6] <- score(six_countries_2.hc.bic,  data= 
+   eassy_share_important_variables_large60_6countries_narm_AD_recall, 
+      type = "bic")
+score_bde_different_structure_new[15,6] <-score(six_countries_2.hc.bic,  data=
+  eassy_share_important_variables_large60_6countries_narm_AD_recall, 
+      type = "bde",iss=10)
+score_loglik_different_structure_new[15,6] <- score(six_countries_2.hc.bic,  data= 
+   eassy_share_important_variables_large60_6countries_narm_AD_recall, 
+      type = "loglik")
+for (i in 1:5){
+  dataframe <- complete(imp_6countries,i)%>%
+         dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD","C")
+score_bic_different_structure_new[15,i] <- score(six_countries_2.hc.bic, 
+      data=dataframe  , type = "bic")
+score_bde_different_structure_new[15,i] <-score(six_countries_2.hc.bic, 
+      data=dataframe  , type = "bde",iss=10)
+score_loglik_different_structure_new[15,i] <- score(six_countries_2.hc.bic, 
+      data=dataframe  , type = "loglik")
+}
+```
+
+
+
+
+hc by bde score
+```{r}
+# Use hill-climbing to determine the DAG (score="bde")
+# hc.bde with drop NA
+set.seed(1)
+six_countries_narm.hc.bde_boot_strength <- boot.strength(data=
+    eassy_share_important_variables_large60_6countries_narm_AD_recall, 
+algorithm = "hc",algorithm.args = list( blacklist = myblacklist_AD_recall, 
+                          whitelist = mywhitelist_AD_recall,   score="bde"))
+plot(six_countries_narm.hc.bde_boot_strength)
+six_countries_narm.hc.bde = averaged.network(
+  six_countries_narm.hc.bde_boot_strength, threshold = 
+    attr(six_countries_narm.hc.bde_boot_strength,"threshold"))
+# Plot final BN model
+graphviz.plot(six_countries_narm.hc.bde,main = "hc(bde,bootstrap) with drop NA")
+
+
+# calculate the score
+score_bic_different_structure_new[16,6] <- score(six_countries_narm.hc.bde,  data= 
+   eassy_share_important_variables_large60_6countries_narm_AD_recall, 
+      type = "bic")
+score_bde_different_structure_new[16,6] <-score(six_countries_narm.hc.bde,  data=
+  eassy_share_important_variables_large60_6countries_narm_AD_recall, 
+      type = "bde",iss=10)
+score_loglik_different_structure_new[16,6] <- score(six_countries_narm.hc.bde,  data= 
+   eassy_share_important_variables_large60_6countries_narm_AD_recall, 
+      type = "loglik")
+for (i in 1:5){
+  dataframe <- complete(imp_6countries,i)%>%
+         dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD","C")
+score_bic_different_structure_new[16,i] <- score(six_countries_narm.hc.bde, 
+      data=dataframe  , type = "bic")
+score_bde_different_structure_new[16,i] <-score(six_countries_narm.hc.bde, 
+      data=dataframe  , type = "bde",iss=10)
+score_loglik_different_structure_new[16,i] <- score(six_countries_narm.hc.bde, 
+      data=dataframe  , type = "loglik")
+}
+# Use hill-climbing to determine the DAG (score="bde")
+# hc.bde with first imputatiom
+set.seed(1)
+six_countries_1.hc.bde_boot_strength <- boot.strength(data=imp_6countries_1, 
+algorithm = "hc",algorithm.args = list( blacklist = myblacklist_AD_recall, 
+                          whitelist = mywhitelist_AD_recall,   score="bde"))
+plot(six_countries_1.hc.bde_boot_strength)
+six_countries_1.hc.bde = averaged.network(
+  six_countries_1.hc.bde_boot_strength, threshold = 
+    attr(six_countries_1.hc.bde_boot_strength,"threshold"))
+# Plot final BN model
+graphviz.plot(six_countries_1.hc.bde,main = "hc(bde,bootstrap) with drop NA")
+
+
+# calculate the score
+score_bic_different_structure_new[17,6] <- score(six_countries_1.hc.bde,  data= 
+   eassy_share_important_variables_large60_6countries_narm_AD_recall, 
+      type = "bic")
+score_bde_different_structure_new[17,6] <-score(six_countries_1.hc.bde,  data=
+  eassy_share_important_variables_large60_6countries_narm_AD_recall, 
+      type = "bde",iss=10)
+score_loglik_different_structure_new[17,6] <- score(six_countries_1.hc.bde,  data= 
+   eassy_share_important_variables_large60_6countries_narm_AD_recall, 
+      type = "loglik")
+for (i in 1:5){
+  dataframe <- complete(imp_6countries,i)%>%
+         dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD","C")
+score_bic_different_structure_new[17,i] <- score(six_countries_1.hc.bde, 
+      data=dataframe  , type = "bic")
+score_bde_different_structure_new[17,i] <-score(six_countries_1.hc.bde, 
+      data=dataframe  , type = "bde",iss=10)
+score_loglik_different_structure_new[17,i] <- score(six_countries_1.hc.bde, 
+      data=dataframe  , type = "loglik")
+}
+# hc.bde with second imputation
+set.seed(1)
+six_countries_2.hc.bde_boot_strength <- boot.strength(data=imp_6countries_2, 
+algorithm = "hc",algorithm.args = list( blacklist = myblacklist_AD_recall, 
+                          whitelist = mywhitelist_AD_recall,   score="bde"))
+plot(six_countries_2.hc.bde_boot_strength)
+six_countries_2.hc.bde = averaged.network(
+  six_countries_2.hc.bde_boot_strength, threshold = 
+    attr(six_countries_2.hc.bde_boot_strength,"threshold"))
+# Plot final BN model
+graphviz.plot(six_countries_2.hc.bde,main = "hc(bde,bootstrap) with drop NA")
+
+
+# calculate the score
+score_bic_different_structure_new[18,6] <- score(six_countries_2.hc.bde,  data= 
+   eassy_share_important_variables_large60_6countries_narm_AD_recall, 
+      type = "bic")
+score_bde_different_structure_new[18,6] <-score(six_countries_2.hc.bde,  data=
+  eassy_share_important_variables_large60_6countries_narm_AD_recall, 
+      type = "bde",iss=10)
+score_loglik_different_structure_new[18,6] <- score(six_countries_2.hc.bde,  data= 
+   eassy_share_important_variables_large60_6countries_narm_AD_recall, 
+      type = "loglik")
+for (i in 1:5){
+  dataframe <- complete(imp_6countries,i)%>%
+         dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM",
+     "EDUL", "AD","C")
+score_bic_different_structure_new[18,i] <- score(six_countries_2.hc.bde, 
+      data=dataframe  , type = "bic")
+score_bde_different_structure_new[18,i] <-score(six_countries_2.hc.bde, 
+      data=dataframe  , type = "bde",iss=10)
+score_loglik_different_structure_new[18,i] <- score(six_countries_2.hc.bde, 
+      data=dataframe  , type = "loglik")
+}
+```
+
+
+#### compare the different dag by network score and k-fold cross-validation
+```{r}
+# find the max score
+bic_score_max_six_daaset_new <- apply(score_bic_different_structure_new,2,which.max)
+bde_score_max_six_daaset_new <- apply(score_bde_different_structure_new,2,which.max)
+loglik_score_max_six_daaset_new <- apply(score_loglik_different_structure_new,2,which.max)
+# the max score for bde is graph 14
+# the max score for bic is graph 17
+# the max score for loglik is graph 8
+# we need to compare the two graph to see what the difference?
+# graph  8, 14 and 17
+graphviz.compare(six_countries.fast.iamb_1,six_countries_1.hc.bic,
+                 main =c("graph 8","graph 8 and 14") )
+
+graphviz.compare(six_countries.fast.iamb_1,six_countries_1.hc.bde,
+                 main =c("graph 8","graph 8 and 17") )
+#  try to compare them and find the better one
+# use bn.cv to compare them
+dag_8_2 <- six_countries.fast.iamb_1
+dag_14 <- six_countries_1.hc.bic
+dag_17 <- six_countries_2.hc.bde
+
+min_loss_matrix_new <- matrix(nrow = 3,ncol=6)
+set.seed(1)
+# calculate the min loss
+dag_8_2_narm <-bn.cv(data=
+        eassy_share_important_variables_large60_6countries_narm_AD_recall,
+                    bn=dag_8_2,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_new[1,6] = min_loss(dag_8_2_narm)
+for (i in 1:5){
+  dataframe <- complete(imp_6countries,i)%>%
+         dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM","EDUL", "AD","C")
+dag_8_2_ <-bn.cv(data=dataframe,
+                    bn=dag_8_2,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_new [1,i] <- min_loss(dag_8_2_)
+}
+
+set.seed(1)
+dag_14_narm <-bn.cv(data=
+        eassy_share_important_variables_large60_6countries_narm_AD_recall,
+                    bn=dag_14,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_new[2,6] = min_loss(dag_14_narm)
+for (i in 1:5){
+  dataframe <- complete(imp_6countries,i)%>%
+         dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM","EDUL", "AD","C")
+dag_14_ <-bn.cv(data=dataframe,
+                    bn=dag_14,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_new [2,i] <- min_loss(dag_14_)
+}
+
+set.seed(1)
+# calculate the min loss
+dag_17_narm <-bn.cv(data=
+        eassy_share_important_variables_large60_6countries_narm_AD_recall,
+                    bn=dag_17,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_new[3,6] = min_loss(dag_17_narm)
+for (i in 1:5){
+  dataframe <- complete(imp_6countries,i)%>%
+         dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM","EDUL", "AD","C")
+dag_17_ <-bn.cv(data=dataframe,
+                    bn=dag_17,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_new [3,i] <- min_loss(dag_17_)
+}
+
+# find the minimum
+loss_min_six_daaset_new <- apply(min_loss_matrix_new,2,which.min)
+# the better one is the graph 14
+
+```
+
+
+
+
+
+####  check the independence (ci test)
+
+
+using ci test to find other edges
+```{r}
+# Plot final BN model
+graphviz.plot(dag_14,main =c("graph 14") )
+better_dag <- dag_14
+# from the plot the markov blanket for node AD only(Age,EDUL)
+
+#check other risk factor (VA,DS,NOD,BMI,DK,SMK,Sex,HAM,LWNP)
+# for VA
+#from the plot we can get Age is independent to AD if we know EDUL, Age
+ci.test("AD", "VA", c("Age","EDUL"), test = "jt", data =
+          eassy_share_important_variables_large60_6countries_AD_recall)
+# the ci test is dependent so add new edge
+better_dag <- set.arc(better_dag,"VA","AD")
+
+# for DS
+#from the plot we can get Age is independent to AD if we know EDUL, Age and VA
+ci.test("AD", "DS", c("Age","EDUL","VA"), test = "jt", data =
+          eassy_share_important_variables_large60_6countries_AD_recall)
+ci.test("AD", "DS", c("Age","EDUL"), test = "jt", data =
+          eassy_share_important_variables_large60_6countries_AD_recall)
+# the ci test is dependent so add new edge
+better_dag <- set.arc(better_dag,"VA","AD")
+
+
+
+# for HAM
+#from the plot we can get HAM is independent to AD if we know EDUL,Age,DS and VA 
+ci.test("AD", "HAM", c("VA","EDUL","Age","DS"), test = "jt", data =
+          eassy_share_important_variables_large60_6countries_AD_recall)
+ci.test("AD", "HAM", c("VA","EDUL","Age"), test = "jt", data =
+          eassy_share_important_variables_large60_6countries_AD_recall)
+ci.test("AD", "HAM", c("Age","EDUL"), data=
+  eassy_share_important_variables_large60_6countries_AD_recall,test="jt")
+# the ci test is dependent so add new edge
+better_dag <- set.arc(better_dag,"HAM","AD")
+
+
+# for LWNP
+#from the plot we can get LWNP is independent to AD if we know EDUL,Age,DS and VA 
+ci.test("AD", "LWNP", c("VA","EDUL","Age","DS","HAM"), test = "jt", data =
+          eassy_share_important_variables_large60_6countries_AD_recall)
+ci.test("AD", "LWNP", c("VA","EDUL","Age","DS"), test = "jt", data =
+          eassy_share_important_variables_large60_6countries_AD_recall)
+ci.test("AD", "LWNP", c("VA","EDUL","Age"), test = "jt", data =
+          eassy_share_important_variables_large60_6countries_AD_recall)
+ci.test("AD", "LWNP", c("EDUL","Age"), test = "jt", data =
+          eassy_share_important_variables_large60_6countries_AD_recall)
+better_dag <- set.arc(better_dag,"LWNP","AD")
+
+# for BMI
+#from the plot we can get BMI is independent to AD if we know EDUL,Age,DS,VA and HAM
+ci.test("AD", "BMI", c("VA","EDUL","Age","DS","HAM","LWNP"), test = "jt", data =
+          eassy_share_important_variables_large60_6countries_AD_recall)
+ci.test("AD", "BMI", c("VA","EDUL","Age","DS","HAM"), test = "jt", data =
+          eassy_share_important_variables_large60_6countries_AD_recall)
+ci.test("AD", "BMI", c("VA","EDUL","Age","DS"), test = "jt", data =
+          eassy_share_important_variables_large60_6countries_AD_recall)
+ci.test("AD", "BMI", c("VA","EDUL","Age"), test = "jt", data =
+          eassy_share_important_variables_large60_6countries_AD_recall)
+ci.test("AD", "BMI", c("Age","EDUL"), data=
+  eassy_share_important_variables_large60_6countries_AD_recall,test="jt")
+
+# for SMK
+#from the plot we can get SMk is independent to AD if we know EDUL,Age,DS, HAM and LWNP
+ci.test("AD", "SMK", c("VA","EDUL","Age","DS","HAM","LWNP"), test = "mi", data =
+          eassy_share_important_variables_large60_6countries_AD_recall)
+ci.test("AD", "SMK", c("VA","EDUL","Age","DS","HAM"), test = "mi", data =
+          eassy_share_important_variables_large60_6countries_AD_recall)
+ci.test("AD", "SMK", c("VA","EDUL","Age","DS"), test = "mi", data =
+          eassy_share_important_variables_large60_6countries_AD_recall)
+ci.test("AD", "SMK", c("VA","EDUL","Age"), test = "mi", data =
+          eassy_share_important_variables_large60_6countries_AD_recall)
+ci.test("AD", "SMK", c("Age","EDUL"), data=
+  eassy_share_important_variables_large60_6countries_AD_recall,test="mi")
+
+
+
+
+
+# for DK
+#from the plot we can get DK is independent to AD if we know EDUL,Age,DS and VA 
+ci.test("AD", "DK", c("VA","EDUL","Age","DS","HAM","LWNP"), test = "jt", data =
+          eassy_share_important_variables_large60_6countries_AD_recall)
+ci.test("AD", "DK", c("VA","EDUL","Age","DS","HAM"), test = "jt", data =
+          eassy_share_important_variables_large60_6countries_AD_recall)
+ci.test("AD", "DK", c("VA","EDUL","Age","DS"), test = "jt", data =
+          eassy_share_important_variables_large60_6countries_AD_recall)
+ci.test("AD", "DK", c("VA","EDUL","Age"), test = "jt", data =
+          eassy_share_important_variables_large60_6countries_AD_recall)
+ci.test("AD", "DK", c("Age","EDUL"), data=
+  eassy_share_important_variables_large60_6countries_AD_recall,test="jt")
+
+
+
+# for Sex
+#from the plot we can get Sex is independent to AD if we know EDUL,Age,DS and VA 
+ci.test("AD", "Sex", c("VA","EDUL","Age","DS","HAM","LWNP"), test = "mi", data =
+          eassy_share_important_variables_large60_6countries_AD_recall)
+ci.test("AD", "Sex", c("VA","EDUL","Age","DS","HAM"), test = "mi", data =
+          eassy_share_important_variables_large60_6countries_AD_recall)
+ci.test("AD", "Sex", c("VA","EDUL","Age","DS"), test = "mi", data =
+          eassy_share_important_variables_large60_6countries_AD_recall)
+ci.test("AD", "Sex", c("VA","EDUL","Age"), test = "mi", data =
+          eassy_share_important_variables_large60_6countries_AD_recall)
+ci.test("AD", "Sex", c("Age","EDUL"), data=
+  eassy_share_important_variables_large60_6countries_AD_recall,test="mi")
+
+
+
+
+
+
+
+# for NOD
+#from the plot we can get NOD is independent to AD if we know EDUL,Age,DS and VA 
+ci.test("AD", "NOD", c("VA","EDUL","Age","DS","HAM","LWNP"), test = "jt", data =
+          eassy_share_important_variables_large60_6countries_AD_recall)
+ci.test("AD", "NOD", c("VA","EDUL","Age","DS","HAM"), test = "jt", data =
+          eassy_share_important_variables_large60_6countries_AD_recall)
+ci.test("AD", "NOD", c("VA","EDUL","Age","DS"), test = "jt", data =
+          eassy_share_important_variables_large60_6countries_AD_recall)
+ci.test("AD", "NOD", c("VA","EDUL","Age"), test = "jt", data =
+          eassy_share_important_variables_large60_6countries_AD_recall)
+ci.test("AD", "NOD", c("Age","EDUL"), data=
+  eassy_share_important_variables_large60_6countries_AD_recall,test="jt")
+
+# for C
+#from the plot we can get NOD is independent to AD if we know EDUL,Age,DS and VA 
+ci.test("AD", "C", c("VA","EDUL","Age","DS","HAM","LWNP"), test = "mi", data =
+          eassy_share_important_variables_large60_6countries_AD_recall)
+ci.test("AD", "C", c("VA","EDUL","Age","DS","HAM"), test = "mi", data =
+          eassy_share_important_variables_large60_6countries_AD_recall)
+ci.test("AD", "C", c("VA","EDUL","Age","DS"), test = "mi", data =
+          eassy_share_important_variables_large60_6countries_AD_recall)
+ci.test("AD", "C", c("VA","EDUL","Age"), test = "mi", data =
+          eassy_share_important_variables_large60_6countries_AD_recall)
+ci.test("AD", "C", c("Age","EDUL"), data=
+  eassy_share_important_variables_large60_6countries_AD_recall,test="mi")
+
+
+
+
+graphviz.plot(better_dag)
+```
+
+
+```{r}
+set.seed(4)
+better_dag <- dag_14
+better_dag_1_1 <-set.arc(better_dag,"VA","AD")
+better_dag_1_2 <-set.arc(better_dag,"DS","AD")
+better_dag_1_3 <-set.arc(better_dag,"HAM","AD")
+better_dag_1_4 <-set.arc(better_dag,"LWNP","AD")
+better_dag_2_1 <-set.arc(better_dag_1_1,"DS","AD")
+better_dag_2_2 <-set.arc(better_dag_1_1,"HAM","AD")
+better_dag_2_3 <-set.arc(better_dag_1_1,"LWNP","AD")
+better_dag_2_4 <-set.arc(better_dag_1_2,"HAM","AD")
+better_dag_2_5 <-set.arc(better_dag_1_2,"LWNP","AD")
+better_dag_2_6 <-set.arc(better_dag_1_3,"LWNP","AD")
+better_dag_3_1 <-set.arc(better_dag_2_1,"HAM","AD")
+better_dag_3_2 <-set.arc(better_dag_2_1,"LWNP","AD")
+better_dag_3_3 <-set.arc(better_dag_2_3,"DS","AD")
+better_dag_3_4 <-set.arc(better_dag_2_3,"VA","AD")
+better_dag_4 <-set.arc(better_dag_3_4,"DS","AD")
+min_loss_matrix_better <- matrix(nrow = 16,ncol=6)
+set.seed(1)
+# calculate the mean loss
+dag_14_narm <-bn.cv(data=
+         eassy_share_important_variables_large60_6countries_narm_AD_recall,
+                    bn=dag_14,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better[1,6] = min_loss(dag_14_narm)
+for (i in 1:5){
+  dataframe <- complete(imp_6countries,i)%>%
+         dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM","EDUL", "AD","C")
+dag_14_ <-bn.cv(data=dataframe,
+                    bn=dag_14,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better [1,i] <- min_loss(dag_14_)
+}
+
+
+better_dag_1_1_narm <-bn.cv(data=
+         eassy_share_important_variables_large60_6countries_narm_AD_recall,
+                    bn=better_dag_1_1 ,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better[2,6] = min_loss(better_dag_1_1_narm)
+for (i in 1:5){
+  dataframe <- complete(imp_6countries,i)%>%
+         dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM","EDUL", "AD","C")
+better_dag_1_1_ <-bn.cv(data=dataframe,
+                    bn=better_dag_1_1 ,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better [2,i] <- min_loss(better_dag_1_1_)
+}
+
+
+
+better_dag_1_2_narm <-bn.cv(data=
+         eassy_share_important_variables_large60_6countries_narm_AD_recall,
+                    bn=better_dag_1_2,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better[3,6] = min_loss(better_dag_1_2_narm)
+for (i in 1:5){
+  dataframe <- complete(imp_6countries,i)%>%
+         dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM","EDUL", "AD","C")
+better_dag_1_2_ <-bn.cv(data=dataframe,
+                    bn=better_dag_1_2,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better [3,i] <- min_loss(better_dag_1_2_)
+}
+
+better_dag_1_3_narm <-bn.cv(data=
+         eassy_share_important_variables_large60_6countries_narm_AD_recall,
+                    bn=better_dag_1_3,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better[4,6] = min_loss(better_dag_1_3_narm)
+for (i in 1:5){
+  dataframe <- complete(imp_6countries,i)%>%
+         dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM","EDUL", "AD","C")
+better_dag_1_3_ <-bn.cv(data=dataframe,
+                    bn=better_dag_1_3,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better [4,i] <- min_loss(better_dag_1_3_)
+}
+
+better_dag_1_4_narm <-bn.cv(data=
+         eassy_share_important_variables_large60_6countries_narm_AD_recall,
+                    bn=better_dag_1_4,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better[5,6] = min_loss(better_dag_1_4_narm)
+for (i in 1:5){
+  dataframe <- complete(imp_6countries,i)%>%
+         dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM","EDUL", "AD","C")
+better_dag_1_4_ <-bn.cv(data=dataframe,
+                    bn=better_dag_1_4,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better [5,i] <- min_loss(better_dag_1_4_)
+}
+
+better_dag_2_1_narm <-bn.cv(data=
+         eassy_share_important_variables_large60_6countries_narm_AD_recall,
+                    bn=better_dag_2_1,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better[6,6] = min_loss(better_dag_2_1_narm)
+for (i in 1:5){
+  dataframe <- complete(imp_6countries,i)%>%
+         dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM","EDUL", "AD","C")
+better_dag_2_1_ <-bn.cv(data=dataframe,
+                    bn=better_dag_2_1,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better [6,i] <- min_loss(better_dag_2_1_)
+}
+
+better_dag_2_2_narm <-bn.cv(data=
+         eassy_share_important_variables_large60_6countries_narm_AD_recall,
+                    bn=better_dag_2_2,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better[7,6] = min_loss(better_dag_2_2_narm)
+for (i in 1:5){
+  dataframe <- complete(imp_6countries,i)%>%
+         dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM","EDUL", "AD","C")
+better_dag_2_2_ <-bn.cv(data=dataframe,
+                    bn=better_dag_2_2,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better [7,i] <- min_loss(better_dag_2_2_)
+}
+
+better_dag_2_3_narm <-bn.cv(data=
+         eassy_share_important_variables_large60_6countries_narm_AD_recall,
+                    bn=better_dag_2_3,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better[8,6] = min_loss(better_dag_2_3_narm)
+for (i in 1:5){
+  dataframe <- complete(imp_6countries,i)%>%
+         dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM","EDUL", "AD","C")
+better_dag_2_3_ <-bn.cv(data=dataframe,
+                    bn=better_dag_2_3,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better [8,i] <- min_loss(better_dag_2_3_)
+}
+
+better_dag_2_4_narm <-bn.cv(data=
+         eassy_share_important_variables_large60_6countries_narm_AD_recall,
+                    bn=better_dag_2_4,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better[9,6] = min_loss(better_dag_2_4_narm)
+for (i in 1:5){
+  dataframe <- complete(imp_6countries,i)%>%
+         dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM","EDUL", "AD","C")
+better_dag_2_4_ <-bn.cv(data=dataframe,
+                    bn=better_dag_2_4,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better [9,i] <- min_loss(better_dag_2_4_)
+}
+
+better_dag_2_5_narm <-bn.cv(data=
+         eassy_share_important_variables_large60_6countries_narm_AD_recall,
+                    bn=better_dag_2_5,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better[10,6] = min_loss(better_dag_2_5_narm)
+for (i in 1:5){
+  dataframe <- complete(imp_6countries,i)%>%
+         dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM","EDUL", "AD","C")
+better_dag_2_5_ <-bn.cv(data=dataframe,
+                    bn=better_dag_2_5,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better [10,i] <- min_loss(better_dag_2_5_)
+}
+
+better_dag_2_6_narm <-bn.cv(data=
+         eassy_share_important_variables_large60_6countries_narm_AD_recall,
+                    bn=better_dag_2_6,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better[11,6] = min_loss(better_dag_2_6_narm)
+for (i in 1:5){
+  dataframe <- complete(imp_6countries,i)%>%
+         dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM","EDUL", "AD","C")
+better_dag_2_6_ <-bn.cv(data=dataframe,
+                    bn=better_dag_2_6,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better [11,i] <- min_loss(better_dag_2_6_)
+}
+
+
+better_dag_3_1_narm <-bn.cv(data=
+         eassy_share_important_variables_large60_6countries_narm_AD_recall,
+                    bn=better_dag_3_1,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better[12,6] = min_loss(better_dag_3_1_narm)
+for (i in 1:5){
+  dataframe <- complete(imp_6countries,i)%>%
+         dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM","EDUL", "AD","C")
+better_dag_3_1_ <-bn.cv(data=dataframe,
+                    bn=better_dag_3_1,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better [12,i] <- min_loss(better_dag_3_1_)
+}
+
+
+
+better_dag_3_2_narm <-bn.cv(data=
+         eassy_share_important_variables_large60_6countries_narm_AD_recall,
+                    bn=better_dag_3_2,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better[13,6] = min_loss(better_dag_3_2_narm)
+for (i in 1:5){
+  dataframe <- complete(imp_6countries,i)%>%
+         dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM","EDUL", "AD","C")
+better_dag_3_2_ <-bn.cv(data=dataframe,
+                    bn=better_dag_3_2,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better [13,i] <- min_loss(better_dag_3_2_)
+}
+
+better_dag_3_3_narm <-bn.cv(data=
+         eassy_share_important_variables_large60_6countries_narm_AD_recall,
+                    bn=better_dag_3_3,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better[14,6] = min_loss(better_dag_3_3_narm)
+for (i in 1:5){
+  dataframe <- complete(imp_6countries,i)%>%
+         dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM","EDUL", "AD","C")
+better_dag_3_3_ <-bn.cv(data=dataframe,
+                    bn=better_dag_3_3,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better [14,i] <- min_loss(better_dag_3_3_)
+}
+
+better_dag_3_4_narm <-bn.cv(data=
+         eassy_share_important_variables_large60_6countries_narm_AD_recall,
+                    bn=better_dag_3_4,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better[15,6] = min_loss(better_dag_3_4_narm)
+for (i in 1:5){
+  dataframe <- complete(imp_6countries,i)%>%
+         dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM","EDUL", "AD","C")
+better_dag_3_4_ <-bn.cv(data=dataframe,
+                    bn=better_dag_3_4,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better [15,i] <- min_loss(better_dag_3_4_)
+}
+
+better_dag_4_narm <-bn.cv(data=
+         eassy_share_important_variables_large60_6countries_narm_AD_recall,
+                    bn=better_dag_4,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better[16,6] = min_loss(better_dag_4_narm)
+for (i in 1:5){
+  dataframe <- complete(imp_6countries,i)%>%
+         dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(dataframe) <- c("Sex","Age","LWNP",
+     "NOD","DS","BMI","SMK","DK","VA","HAM","EDUL", "AD","C")
+better_dag_4_ <-bn.cv(data=dataframe,
+                    bn=better_dag_4,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+min_loss_matrix_better [16,i] <- min_loss(better_dag_4_)
+}
+
+
+
+loss_min_six_daaset_better <- apply(min_loss_matrix_better,2,which.min)
+```
+
+
+
+#### fit the model,check the external valiadation
+fit the model using different dataset
+```{r}
+set.seed(4)
+
+better_dag <- better_dag_1_2
+
+# only add age to ad
+bn.bayes_NA = bn.fit(better_dag,data=
+        eassy_share_important_variables_large60_6countries_AD_recall,
+                    method = "bayes",iss=10)
+bn.bayes_narm = bn.cv(data=
+        eassy_share_important_variables_large60_6countries_narm_AD_recall,
+                    bn=better_dag,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+bn.bayes_1 = bn.cv(data=imp_6countries_1,
+                    bn=better_dag,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+bn.bayes_2 = bn.cv(data=imp_6countries_2,
+                    bn=better_dag,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+bn.bayes_3 = bn.cv(data=imp_6countries_3,
+                    bn=better_dag,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+bn.bayes_4 = bn.cv(data=imp_6countries_4,
+                    bn=better_dag,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+bn.bayes_5 = bn.cv(data=imp_6countries_5,
+                    bn=better_dag,fit="bayes",fit.args=list(iss=10),method = "k-fold")
+
+
+find_min <- function(x,k=10){
+  a <- numeric(k)
+  for (i in 1:k){
+    a[i]<-x[[i]]$loss
+  }
+  index <- which.min(a)
+  index
+}
+
+# find the minimum index for 
+min_index_narm <- find_min(bn.bayes_narm)
+bn.bayes_narm_ <- bn.bayes_narm[[min_index_narm ]]
+min_index_1 <- find_min(bn.bayes_1)
+bn.bayes_1 <- bn.bayes_1[[min_index_1 ]]
+min_index_2 <- find_min(bn.bayes_2)
+bn.bayes_2 <- bn.bayes_2[[min_index_2 ]]
+min_index_3 <- find_min(bn.bayes_3)
+bn.bayes_3 <- bn.bayes_3[[min_index_3 ]]
+min_index_4 <- find_min(bn.bayes_4)
+bn.bayes_4 <- bn.bayes_4[[min_index_4 ]]
+min_index_5 <- find_min(bn.bayes_5)
+bn.bayes_5 <- bn.bayes_5[[min_index_5 ]]
+
+# change list to bn.fit object
+bn.bayes_narm <- bn.bayes_NA
+# fOr Sex
+bn.bayes_narm$Sex <- bn.bayes_narm_$fitted$Sex$prob
+# fOr Age
+bn.bayes_narm$Age <- bn.bayes_narm_$fitted$Age$prob
+# fOr SMK
+bn.bayes_narm$SMK <- bn.bayes_narm_$fitted$SMK$prob
+# fOr DK
+bn.bayes_narm$DK <- bn.bayes_narm_$fitted$DK$prob
+# fOr HAM
+bn.bayes_narm$HAM <- bn.bayes_narm_$fitted$HAM$prob
+# fOr LWNP
+bn.bayes_narm$LWNP <- bn.bayes_narm_$fitted$LWNP$prob
+# fOr DS
+bn.bayes_narm$DS <- bn.bayes_narm_$fitted$DS$prob
+# fOr EDUL
+bn.bayes_narm$EDUL <- bn.bayes_narm_$fitted$EDUL$prob
+# fOr VA
+bn.bayes_narm$VA <- bn.bayes_narm_$fitted$VA$prob
+# fOr NOD
+bn.bayes_narm$NOD <- bn.bayes_narm_$fitted$NOD$prob
+# fOr BMI
+bn.bayes_narm$BMI <- bn.bayes_narm_$fitted$BMI$prob
+# fOr AD
+bn.bayes_narm$AD <- bn.bayes_narm_$fitted$AD$prob
+
+
+
+# combine the 5 impute data estimate by average the estimate
+bn.bayes_imputed<- bn.bayes_NA
+# fOr Sex
+bn.bayes_imputed$Sex <- (bn.bayes_1$fitted$Sex$prob+ bn.bayes_2$fitted$Sex$prob+bn.bayes_3$fitted$Sex$prob+
+                         bn.bayes_4$fitted$Sex$prob+bn.bayes_5$fitted$Sex$prob)/5
+# fOr Age
+bn.bayes_imputed$Age <- (bn.bayes_1$fitted$Age$prob+ bn.bayes_2$fitted$Age$prob+bn.bayes_3$fitted$Age$prob+
+                         bn.bayes_4$fitted$Age$prob+bn.bayes_5$fitted$Age$prob)/5
+# fOr SMK
+bn.bayes_imputed$SMK <- (bn.bayes_1$fitted$SMK$prob+ bn.bayes_2$fitted$SMK$prob+bn.bayes_3$fitted$SMK$prob+
+                         bn.bayes_4$fitted$SMK$prob+bn.bayes_5$fitted$SMK$prob)/5
+# fOr DK
+bn.bayes_imputed$DK <- (bn.bayes_1$fitted$DK$prob+ bn.bayes_2$fitted$DK$prob+bn.bayes_3$fitted$DK$prob+
+                         bn.bayes_4$fitted$DK$prob+bn.bayes_5$fitted$DK$prob)/5
+# fOr HAM
+bn.bayes_imputed$HAM <- (bn.bayes_1$fitted$HAM$prob+ bn.bayes_2$fitted$HAM$prob+bn.bayes_3$fitted$HAM$prob+
+                         bn.bayes_4$fitted$HAM$prob+bn.bayes_5$fitted$HAM$prob)/5
+# fOr LWNP
+bn.bayes_imputed$LWNP <- (bn.bayes_1$fitted$LWNP$prob+ bn.bayes_2$fitted$LWNP$prob+bn.bayes_3$fitted$LWNP$prob+
+                         bn.bayes_4$fitted$LWNP$prob+bn.bayes_5$fitted$LWNP$prob)/5
+# fOr DS
+bn.bayes_imputed$DS <- (bn.bayes_1$fitted$DS$prob+ bn.bayes_2$fitted$DS$prob+bn.bayes_3$fitted$DS$prob+
+                         bn.bayes_4$fitted$DS$prob+bn.bayes_5$fitted$DS$prob)/5
+# fOr EDUL
+bn.bayes_imputed$EDUL <- (bn.bayes_1$fitted$EDUL$prob+ bn.bayes_2$fitted$EDUL$prob+bn.bayes_3$fitted$EDUL$prob+
+                         bn.bayes_4$fitted$EDUL$prob+bn.bayes_5$fitted$EDUL$prob)/5
+# fOr VA
+bn.bayes_imputed$VA <- (bn.bayes_1$fitted$VA$prob+ bn.bayes_2$fitted$VA$prob+bn.bayes_3$fitted$VA$prob+
+                         bn.bayes_4$fitted$VA$prob+bn.bayes_5$fitted$VA$prob)/5
+# fOr NOD
+bn.bayes_imputed$NOD <- (bn.bayes_1$fitted$NOD$prob+ bn.bayes_2$fitted$NOD$prob+bn.bayes_3$fitted$NOD$prob+
+                         bn.bayes_4$fitted$NOD$prob+bn.bayes_5$fitted$NOD$prob)/5
+# fOr BMI
+bn.bayes_imputed$BMI <- (bn.bayes_1$fitted$BMI$prob+ bn.bayes_2$fitted$BMI$prob+bn.bayes_3$fitted$BMI$prob+
+                         bn.bayes_4$fitted$BMI$prob+bn.bayes_5$fitted$BMI$prob)/5
+# fOr AD
+bn.bayes_imputed$AD <- (bn.bayes_1$fitted$AD$prob+ bn.bayes_2$fitted$AD$prob+bn.bayes_3$fitted$AD$prob+
+                         bn.bayes_4$fitted$AD$prob+bn.bayes_5$fitted$AD$prob)/5
+
+# the predict error
+set.seed(2)
+
+sum_a<-0
+sum_b<-0
+sum_c<-0
+for (i in 1:10){
+aaa<-predict(bn.bayes_imputed,"AD",eassy_share_important_variables_large60_6countries_narm_AD_recall)
+bbb<-predict(bn.bayes_narm,"AD",eassy_share_important_variables_large60_6countries_narm_AD_recall)
+ccc<-predict(bn.bayes_NA,"AD",eassy_share_important_variables_large60_6countries_narm_AD_recall)
+l1 <-nrow(eassy_share_important_variables_large60_6countries_narm_AD_recall)
+prob_a <- length(which(aaa!=eassy_share_important_variables_large60_6countries_narm_AD_recall$AD))/l1
+prob_b <-length(which(bbb!=eassy_share_important_variables_large60_6countries_narm_AD_recall$AD))/l1
+prob_c <-length(which(ccc!=eassy_share_important_variables_large60_6countries_narm_AD_recall$AD))/l1
+sum_a <- sum_a+prob_a
+sum_b <- sum_b+prob_b
+sum_c <- sum_c+prob_c
+}
+cat(" bn.bayes_imputed error rate(drop na data set):",sum_a/10)
+cat("\n bn.bayes_narm error rate(drop na data set):",sum_b/10)
+cat("\n bn.bayes_NA error rate(drop na data set):",sum_c/10)
+
+
+
+# for the imputed data set
+
+sum_a_1<-0
+sum_b_1<-0
+sum_c_1<-0
+for (i in 1:10){
+aaa<-predict(bn.bayes_imputed,"AD",imp_6countries_1)
+bbb<-predict(bn.bayes_narm,"AD",imp_6countries_1)
+ccc<-predict(bn.bayes_NA,"AD",imp_6countries_1)
+l1 <-nrow(imp_6countries_1)
+prob_a <- length(which(aaa!=imp_6countries_1$AD))/l1
+prob_b <-length(which(bbb!=imp_6countries_1$AD))/l1
+prob_c <-length(which(ccc!=imp_6countries_1$AD))/l1
+sum_a_1 <- sum_a_1+prob_a
+sum_b_1 <- sum_b_1+prob_b
+sum_c_1 <- sum_c_1+prob_c
+}
+sum_a_2<-0
+sum_b_2<-0
+sum_c_2<-0
+for (i in 1:10){
+aaa<-predict(bn.bayes_imputed,"AD",imp_6countries_2)
+bbb<-predict(bn.bayes_narm,"AD",imp_6countries_2)
+ccc<-predict(bn.bayes_NA,"AD",imp_6countries_2)
+l1 <-nrow(imp_6countries_2)
+prob_a <- length(which(aaa!=imp_6countries_2$AD))/l1
+prob_b <-length(which(bbb!=imp_6countries_2$AD))/l1
+prob_c <-length(which(ccc!=imp_6countries_2$AD))/l1
+sum_a_2 <- sum_a_2+prob_a
+sum_b_2 <- sum_b_2+prob_b
+sum_c_2 <- sum_c_2+prob_c
+}
+sum_a_3<-0
+sum_b_3<-0
+sum_c_3<-0
+for (i in 1:10){
+aaa<-predict(bn.bayes_imputed,"AD",imp_6countries_3)
+bbb<-predict(bn.bayes_narm,"AD",imp_6countries_3)
+ccc<-predict(bn.bayes_NA,"AD",imp_6countries_3)
+l1 <-nrow(imp_6countries_3)
+prob_a <- length(which(aaa!=imp_6countries_3$AD))/l1
+prob_b <-length(which(bbb!=imp_6countries_3$AD))/l1
+prob_c <-length(which(ccc!=imp_6countries_3$AD))/l1
+sum_a_3 <- sum_a_3+prob_a
+sum_b_3 <- sum_b_3+prob_b
+sum_c_3 <- sum_c_3+prob_c
+}
+sum_a_4<-0
+sum_b_4<-0
+sum_c_4<-0
+for (i in 1:10){
+aaa<-predict(bn.bayes_imputed,"AD",imp_6countries_4)
+bbb<-predict(bn.bayes_narm,"AD",imp_6countries_4)
+ccc<-predict(bn.bayes_NA,"AD",imp_6countries_4)
+l1 <-nrow(imp_6countries_4)
+prob_a <- length(which(aaa!=imp_6countries_4$AD))/l1
+prob_b <-length(which(bbb!=imp_6countries_4$AD))/l1
+prob_c <-length(which(ccc!=imp_6countries_4$AD))/l1
+sum_a_4 <- sum_a_4+prob_a
+sum_b_4 <- sum_b_4+prob_b
+sum_c_4 <- sum_c_4+prob_c
+}
+sum_a_5<-0
+sum_b_5<-0
+sum_c_5<-0
+for (i in 1:10){
+aaa<-predict(bn.bayes_imputed,"AD",imp_6countries_5)
+bbb<-predict(bn.bayes_narm,"AD",imp_6countries_5)
+ccc<-predict(bn.bayes_NA,"AD",imp_6countries_5)
+l1 <-nrow(imp_6countries_5)
+prob_a <- length(which(aaa!=imp_6countries_5$AD))/l1
+prob_b <-length(which(bbb!=imp_6countries_5$AD))/l1
+prob_c <-length(which(ccc!=imp_6countries_5$AD))/l1
+sum_a_5 <- sum_a_5+prob_a
+sum_b_5 <- sum_b_5+prob_b
+sum_c_5 <- sum_c_5+prob_c
+}
+
+
+prob_a_i <-(sum_a_1+sum_a_2+sum_a_3+sum_a_4+sum_a_5)/50
+prob_b_i <-(sum_b_1+sum_b_2+sum_b_3+sum_b_4+sum_b_5)/50
+prob_c_i <-(sum_c_1+sum_c_2+sum_c_3+sum_c_4+sum_c_5)/50
+cat("\n bn.bayes_imputed error rate(imputed data set):",prob_a_i)
+cat("\n bn.bayes_narm error rate(imputed na data set):",prob_b_i)
+cat("\n bn.bayes_NA error rate(imputed na data set):",prob_c_i)
+
+# the best is bn.bayes_NA
+
+
+```
+
+
+use other countries to evaluate the external validation, and choose the better estimate
+```{r}
+set.seed(4)
+# use another wave's dataset to evaluate the external validation 
+# compare bn.bayes_NA and bn.bayes_imputed
+eassy_share_important_variables_large60_3countries <- 
+  eassy_share_important_variables_large60 %>%
+   dplyr::filter(country_iso %in% c(276,440,300)) 
+
+eassy_share_important_variables_large60_3countries <- 
+  eassy_share_important_variables_large60_3countries %>%
+  dplyr::distinct(ID,.keep_all = TRUE) %>%
+   dplyr::filter(wave!=3) %>%
+  dplyr::mutate(countries = ifelse(country_iso %in% c(440),0,ifelse(country_iso %in% c(276),1,2)) )%>%
+  dplyr:: select(-ID,-wave,-wavepart,-country_iso,-combine_cognitive,-dementia_cognitive,-recall_1,-recall_2,-orienti,-numeracy_1,-numeracy_2)
+
+eassy_share_important_variables_large60_3countries$countries<- factor(eassy_share_important_variables_large60_3countries$countries)
+
+eassy_share_important_variables_large60_3countries_AD_recall <-eassy_share_important_variables_large60_3countries %>%
+  dplyr:: select(-combine_recall)
+# change the column names to make it easy to understand
+colnames(eassy_share_important_variables_large60_3countries_AD_recall) <-
+  c("Sex","Age","LWNP","NOD","DS","BMI","SMK","DK",
+    "VA","HAM","EDUL", "AD","C")
+eassy_share_important_variables_large60_3countries_narm_AD_recall <- drop_na(eassy_share_important_variables_large60_3countries_AD_recall)
+set.seed(1)
+
+sum_a<-0
+sum_b<-0
+sum_c<-0
+for (i in 1:10){
+aaa<-predict(bn.bayes_imputed,"AD",eassy_share_important_variables_large60_3countries_narm_AD_recall)
+bbb<-predict(bn.bayes_narm,"AD",eassy_share_important_variables_large60_3countries_narm_AD_recall)
+ccc<-predict(bn.bayes_NA,"AD",eassy_share_important_variables_large60_3countries_narm_AD_recall)
+
+l1 <-nrow(eassy_share_important_variables_large60_3countries_narm_AD_recall)
+prob_a <- length(which(aaa!=eassy_share_important_variables_large60_3countries_narm_AD_recall$AD))/l1
+prob_b <-length(which(bbb!=eassy_share_important_variables_large60_3countries_narm_AD_recall$AD))/l1
+prob_c <-length(which(ccc!=eassy_share_important_variables_large60_3countries_narm_AD_recall$AD))/l1
+sum_a <- sum_a+prob_a
+sum_b <- sum_b+prob_b
+sum_c <- sum_c+prob_c
+}
+cat(" bn.bayes_imputed error rate(drop na data set,wave 5):",sum_a/10)
+cat("\n bn.bayes_narm error rate(drop na data set,wave 5):",sum_b/10)
+cat("\n bn.bayes_NA error rate(drop na data set,wave 5):",sum_c/10)
+
+# the performance are similar bn.bayes_imputed is better
+```
+
+
+
+
+#### prensent the model fit 
+```{r}
+graphviz.plot(better_dag)
+
+
+bn.fit.barchart(bn.bayes_NA$Age)
+
+#bn.fit.barchart(bn.bayes_NA$VA)
+
+bn.fit.barchart(bn.bayes_NA$EDUL)
+# we can see older people more low education level people
+# and different countries have different pattern
+bn.fit.barchart(bn.bayes_NA$DS)
+# we can see female more depression
+# we can see more difficult to make household meat more depression
+# we can see more disease more depression
+#bn.fit.barchart(bn.bayes_NA$HAM)
+# higher education level more easy to make household to meat 
+# and different countries have different pattern
+#bn.fit.barchart(bn.bayes_NA$LWNP)
+#bn.fit.barchart(bn.bayes_NA$AD)
+```
+
+
+line plot
+```{r}
+p1 <- ggplot(mapping = aes(x = rep(seq(1:length(levels(eassy_share_important_variables_large60_6countries_AD_recall$Age))),3),
+                     y=matrix(t(bn.bayes_NA$AD$prob[,,1,1]), ncol =1), color = rep(levels(eassy_share_important_variables_large60_6countries_AD_recall$AD), each = length(levels(eassy_share_important_variables_large60_6countries_AD_recall$Age))))) + 
+  geom_point() +
+  geom_line() +
+  scale_x_discrete(breaks=seq(1:length(levels(eassy_share_important_variables_large60_6countries_AD_recall$Age))),
+        labels=levels(eassy_share_important_variables_large60_6countries_AD_recall$Age)) +
+  labs(x = "Age", y= "Conditional probability", color = "Cognitive score", title ="DS = [0,2), EDUL = [0,2)")
+
+p2 <- ggplot(mapping = aes(x = rep(seq(1:length(levels(eassy_share_important_variables_large60_6countries_AD_recall$Age))),3),
+                     y=matrix(t(bn.bayes_NA$AD$prob[,,2,1]), ncol =1), color = rep(levels(eassy_share_important_variables_large60_6countries_AD_recall$AD), each = length(levels(eassy_share_important_variables_large60_6countries_AD_recall$Age))))) + 
+  geom_point() +
+  geom_line() +
+  scale_x_discrete(breaks=seq(1:length(levels(eassy_share_important_variables_large60_6countries_AD_recall$Age))),
+        labels=levels(eassy_share_important_variables_large60_6countries_AD_recall$Age)) +
+  labs(x = "Age", y= "Conditional probability", color = "Cognitive score", title ="DS = [2,5), EDUL = [0,2)")
+
+
+p3 <- ggplot(mapping = aes(x = rep(seq(1:length(levels(eassy_share_important_variables_large60_6countries_AD_recall$Age))),3),
+                     y=matrix(t(bn.bayes_NA$AD$prob[,,1,2]), ncol =1), color = rep(levels(eassy_share_important_variables_large60_6countries_AD_recall$AD), each = length(levels(eassy_share_important_variables_large60_6countries_AD_recall$Age))))) + 
+  geom_point() +
+  geom_line() +
+  scale_x_discrete(breaks=seq(1:length(levels(eassy_share_important_variables_large60_6countries_AD_recall$Age))),
+        labels=levels(eassy_share_important_variables_large60_6countries_AD_recall$Age)) +
+  labs(x = "Age", y= "Conditional probability", color = "Cognitive score", title =" DS = [0,2), EDUL = [2,3)")
+
+p4 <- ggplot(mapping = aes(x = rep(seq(1:length(levels(eassy_share_important_variables_large60_6countries_AD_recall$Age))),3),
+                     y=matrix(t(bn.bayes_NA$AD$prob[,,2,2]), ncol =1), color = rep(levels(eassy_share_important_variables_large60_6countries_AD_recall$AD), each = length(levels(eassy_share_important_variables_large60_6countries_AD_recall$Age))))) + 
+  geom_point() +
+  geom_line() +
+  scale_x_discrete(breaks=seq(1:length(levels(eassy_share_important_variables_large60_6countries_AD_recall$Age))),
+        labels=levels(eassy_share_important_variables_large60_6countries_AD_recall$Age)) +
+  labs(x = "Age", y= "Conditional probability", color = "Cognitive score", title ="DS = [2,5), EDUL = [2,3)")
+
+
+
+grid.arrange(p1, p2, p3, p4,nrow = 2)
+```
+
+
+
+re fit by polr
+
+
+```{r}
+library(MASS)
+polr.fit_1 =polr(AD ~ Age + EDUL+DS, data = imp_6countries_1)
+polr.fit_2 =polr(AD ~ Age + EDUL+DS, data = imp_6countries_2)
+polr.fit_3=polr(AD ~ Age + EDUL+DS, data = imp_6countries_3)
+polr.fit_4 =polr(AD ~ Age + EDUL+DS, data = imp_6countries_4)
+polr.fit_5 =polr(AD ~ Age + EDUL+DS, data = imp_6countries_5)
+polr.list <- list(polr.fit_1,polr.fit_2,polr.fit_3,polr.fit_4,polr.fit_5)
+#pool.fit <-pool(polr.list)
+EDUL.lv = levels(imp_6countries_1$EDUL)
+Age.lv = levels(imp_6countries_1$Age)
+DS.lv = levels(imp_6countries_1$DS)
+#HAM.lv = levels(imp_6countries_1$HAM)
+#VA.lv = levels(imp_6countries_1$VA)
+AD.lv = levels(imp_6countries_1$AD)
+#LWNP.lv = levels(imp_6countries_1$LWNP)
+combos = data.frame(Age=rep(Age.lv,length(EDUL.lv)),DS=rep(DS.lv,each = length(Age.lv)),
+                      EDUL=rep(EDUL.lv,each = length(Age.lv)*length(DS.lv)))
+distcsm_1 = predict(polr.fit_1, newdata= combos ,type="p")
+distcsm_2 = predict(polr.fit_2, newdata= combos ,type="p")
+distcsm_3 = predict(polr.fit_3, newdata= combos ,type="p")
+distcsm_4 = predict(polr.fit_4, newdata= combos ,type="p")
+distcsm_5 = predict(polr.fit_5, newdata= combos ,type="p")
+distcsm = (distcsm_1 +distcsm_2 +distcsm_3 +distcsm_4 +distcsm_5)/5
+distcs <- array(dim = c(length(AD.lv), length(Age.lv), length(DS.lv), length(EDUL.lv)), dimnames = list(AD = AD.lv, Age = Age.lv, DS = DS.lv,EDUL = EDUL.lv))
+distcs[,,,] <- array(t(distcsm), dim=c(length(AD.lv), length(Age.lv),length(DS.lv), length(EDUL.lv)))
+bn.bayes_NA_custom <- bn.bayes_NA
+bn.bayes_NA_custom$AD = distcs
+
+#bn.fit.barchart(bn.bayes_NA_custom$AD)
+```
+
+
+
+
+
+re plot the line plot
+
+
+
+```{r}
+p1 <- ggplot(mapping = aes(x = rep(seq(1:length(levels(eassy_share_important_variables_large60_6countries_AD_recall$Age))),3),
+                     y=matrix(t(bn.bayes_NA_custom$AD$prob[,,1,1]), ncol =1), color = rep(levels(eassy_share_important_variables_large60_6countries_AD_recall$AD), each = length(levels(eassy_share_important_variables_large60_6countries_AD_recall$Age))))) + 
+  geom_point() +
+  geom_line() +
+  scale_x_discrete(breaks=seq(1:length(levels(eassy_share_important_variables_large60_6countries_AD_recall$Age))),
+        labels=levels(eassy_share_important_variables_large60_6countries_AD_recall$Age)) +
+  labs(x = "Age", y= "Conditional probability", color = "Cognitive score", title ="DS = [0,2), EDUL = [0,2)")
+
+p2 <- ggplot(mapping = aes(x = rep(seq(1:length(levels(eassy_share_important_variables_large60_6countries_AD_recall$Age))),3),
+                     y=matrix(t(bn.bayes_NA_custom$AD$prob[,,2,1]), ncol =1), color = rep(levels(eassy_share_important_variables_large60_6countries_AD_recall$AD), each = length(levels(eassy_share_important_variables_large60_6countries_AD_recall$Age))))) + 
+  geom_point() +
+  geom_line() +
+  scale_x_discrete(breaks=seq(1:length(levels(eassy_share_important_variables_large60_6countries_AD_recall$Age))),
+        labels=levels(eassy_share_important_variables_large60_6countries_AD_recall$Age)) +
+  labs(x = "Age", y= "Conditional probability", color = "Cognitive score", title ="DS = [2,5), EDUL = [0,2)")
+
+
+p3 <- ggplot(mapping = aes(x = rep(seq(1:length(levels(eassy_share_important_variables_large60_6countries_AD_recall$Age))),3),
+                     y=matrix(t(bn.bayes_NA_custom$AD$prob[,,1,2]), ncol =1), color = rep(levels(eassy_share_important_variables_large60_6countries_AD_recall$AD), each = length(levels(eassy_share_important_variables_large60_6countries_AD_recall$Age))))) + 
+  geom_point() +
+  geom_line() +
+  scale_x_discrete(breaks=seq(1:length(levels(eassy_share_important_variables_large60_6countries_AD_recall$Age))),
+        labels=levels(eassy_share_important_variables_large60_6countries_AD_recall$Age)) +
+  labs(x = "Age", y= "Conditional probability", color = "Cognitive score", title =" DS = [0,2), EDUL = [2,3)")
+
+p4 <- ggplot(mapping = aes(x = rep(seq(1:length(levels(eassy_share_important_variables_large60_6countries_AD_recall$Age))),3),
+                     y=matrix(t(bn.bayes_NA_custom$AD$prob[,,2,2]), ncol =1), color = rep(levels(eassy_share_important_variables_large60_6countries_AD_recall$AD), each = length(levels(eassy_share_important_variables_large60_6countries_AD_recall$Age))))) + 
+  geom_point() +
+  geom_line() +
+  scale_x_discrete(breaks=seq(1:length(levels(eassy_share_important_variables_large60_6countries_AD_recall$Age))),
+        labels=levels(eassy_share_important_variables_large60_6countries_AD_recall$Age)) +
+  labs(x = "Age", y= "Conditional probability", color = "Cognitive score", title ="DS = [2,5), EDUL = [2,3)")
+
+
+
+grid.arrange(p1, p2, p3, p4,nrow = 2)
+```
+
+
+
+```{r}
+
+library(gRain)
+
+graphviz.chart(bn.bayes_NA_custom, grid = TRUE, main = "Original BN")
+# the predict error
+
+set.seed(4)
+
+sum_a<-0
+for (i in 1:10){
+aaa<-predict(bn.bayes_NA_custom,"AD",eassy_share_important_variables_large60_3countries_narm_AD_recall)
+
+l1 <-nrow(eassy_share_important_variables_large60_3countries_narm_AD_recall)
+prob_a <- length(which(aaa!=eassy_share_important_variables_large60_3countries_narm_AD_recall$AD))/l1
+sum_a <- sum_a+prob_a
+}
+cat("\n bn.bayes_NA_custom error rate(drop na data set,wave 5):",sum_a/10)
+
+
+```
+
+
+
+
+test the new estimate by predicted error
+
+#### diagnosis 
+```{r}
+
+
+eassy_share_important_variables_large60_6countries_narm_AD_recall_0_1 <-
+  eassy_share_important_variables_large60_6countries_narm_AD_recall %>%
+   dplyr:: mutate(
+    new_AD = ifelse(AD<="(-1,2]",1,0)
+   ) %>%
+  dplyr:: select(VA,Age,DS,EDUL,AD,new_AD,HAM,LWNP)
+
+
+  n <- nrow(eassy_share_important_variables_large60_6countries_narm_AD_recall_0_1)
+  for (i in 1:n){
+    DS <- eassy_share_important_variables_large60_6countries_narm_AD_recall_0_1$DS[i]
+    EDUL <- eassy_share_important_variables_large60_6countries_narm_AD_recall_0_1$EDUL[i]
+    Age <- eassy_share_important_variables_large60_6countries_narm_AD_recall_0_1$Age[i]
+    #HAM <- eassy_share_important_variables_large60_6countries_narm_AD_recall_0_1$HAM[i]
+    #LWNP <- eassy_share_important_variables_large60_6countries_narm_AD_recall_0_1$LWNP[i]
+    #VA <- eassy_share_important_variables_large60_6countries_narm_AD_recall_0_1$VA[i]
+    #VA <- ifelse(VA<"[4,5)",1,2)
+    #LWNP <- ifelse(LWNP<"(1,2]","(0,1]",ifelse(LWNP<"(2,13]","(1,2]","(2,13]"))
+    #HAM <- ifelse(HAM<"2",1,ifelse(HAM<"3",2,ifelse(HAM<"4",3,4)))
+    DS <- ifelse(DS<="[0,2)",1,ifelse(DS<="[2,5)",2,ifelse(DS<="[5,8)",3,4)))
+    EDUL <- ifelse(EDUL<="[0,2)",1,ifelse(EDUL<="[2,3)",2,ifelse(EDUL<="[3,5)",3,4)))
+    Age <- ifelse(Age<="[60,65)",1,ifelse(Age<="[65,70)",2,ifelse(Age<="[75,80)",3,ifelse(Age<="[80,85)",4,ifelse(Age<="[85,90)",5,6)))))
+    eassy_share_important_variables_large60_6countries_narm_AD_recall_0_1$pred[i]<-bn.bayes_NA_custom$AD$prob[1,Age,DS,EDUL]
+  }
+
+library(predtools)
+# plot calibration 
+calibration_plot(data = eassy_share_important_variables_large60_6countries_narm_AD_recall_0_1, obs = "new_AD", pred = "pred", title = "Calibration plot for development data")
+
+# plot ROC
+library(ROCR)
+pred <- prediction(eassy_share_important_variables_large60_6countries_narm_AD_recall_0_1$pred, eassy_share_important_variables_large60_6countries_narm_AD_recall_0_1$new_AD)
+perf <- performance(pred,"tpr","fpr")
+plot(perf,colorize=TRUE)
+
+
+library(pROC)
+auc(eassy_share_important_variables_large60_6countries_narm_AD_recall_0_1$new_AD,eassy_share_important_variables_large60_6countries_narm_AD_recall_0_1$pred)
+
+
+
+```
+
+
+
